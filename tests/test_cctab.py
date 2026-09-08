@@ -99,7 +99,22 @@ class Tally(Base):
         rows = [{"type": "assistant", "requestId": "r1", "timestamp": "2026-01-01T00:00:00Z",
                  "message": {"model": "claude-opus-5", "usage": usage}} for _ in range(4)]
         got = self.m.tally(rows, None)
-        self.assertEqual(got["all"]["output_tokens"], 200)
+        self.assertEqual(got["turn"]["output_tokens"], 200)
+
+    def test_a_mixed_turn_is_priced_per_model(self):
+        """A Haiku call after an Opus run must not reprice the Opus tokens."""
+        big = {"input_tokens": 0, "output_tokens": 1_000_000,
+               "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        small = {"input_tokens": 0, "output_tokens": 1_000,
+                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        rows = [
+            {"type": "assistant", "requestId": "r1", "timestamp": "2026-01-01T00:00:00Z",
+             "message": {"model": "claude-opus-5", "usage": big}},
+            {"type": "assistant", "requestId": "r2", "timestamp": "2026-01-01T00:00:01Z",
+             "message": {"model": "claude-haiku-4-5", "usage": small}},
+        ]
+        got = self.m.tally(rows, None)
+        self.assertAlmostEqual(got["turn_cost"], 25.0 + 0.005, places=3)
 
     def test_error_seen(self):
         rows = [{"type": "assistant", "requestId": "r1",

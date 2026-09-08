@@ -55,7 +55,7 @@ except ValueError:
 LIMITS_TTL = 3600
 API_TTL = 180
 NOTIFY_COOLDOWN = 60
-LIMIT_STEPS = (80, 95)
+ERROR_WINDOW = 8     # how far back a failure may sit and still count
 
 TELEGRAM_API = "https://api.telegram.org/bot"
 
@@ -294,7 +294,7 @@ def error_text(rows):
     """What actually went wrong, in Claude Code's own words. A failure message
        that only says "failed" sends the person back to the terminal to find
        out whether it was the rate limit, the network or their own code."""
-    for row in reversed(rows[-8:]):
+    for row in reversed(rows[-ERROR_WINDOW:]):
         if not row.get("isApiErrorMessage"):
             continue
         found = user_text(row).strip()
@@ -304,9 +304,12 @@ def error_text(rows):
 
 
 def tally(rows, since):
-    res = {"all": {}, "turn": {}, "model": "", "error": False}
+    """Sums for the turn, priced as we go. One turn can mix models — a Haiku
+       label after an Opus run — and pricing the total at whichever model spoke
+       last understates the bill fivefold."""
+    res = {"turn": {}, "model": "", "error": False, "turn_cost": 0.0}
     seen = set()
-    for row in rows[-5:]:
+    for row in rows[-ERROR_WINDOW:]:
         if row.get("isApiErrorMessage") and (not since or (row.get("timestamp") or "") >= since):
             res["error"] = True
 
@@ -321,14 +324,12 @@ def tally(rows, since):
         seen.add(rid)
         if msg.get("model"):
             res["model"] = msg["model"]
-        targets = ["all"]
-        if since and (row.get("timestamp") or "") >= since:
-            targets.append("turn")
-        for t in targets:
-            d = res[t]
+        if not since or (row.get("timestamp") or "") >= since:
+            bucket = res["turn"]
             for k in ("input_tokens", "output_tokens",
                       "cache_creation_input_tokens", "cache_read_input_tokens"):
-                d[k] = d.get(k, 0) + (usage.get(k) or 0)
+                bucket[k] = bucket.get(k, 0) + (usage.get(k) or 0)
+            res["turn_cost"] += cost(usage, msg.get("model"))
     return res
 
 
@@ -450,7 +451,7 @@ def cli_version():
     return ver
 
 
-def limits(transcript_path):
+def limits(_transcript_path=None):
     """Best source first: our wrapper, then the endpoint if allowed, else nothing.
 
     Nothing is a fine answer. The message still carries what the task cost.
@@ -527,34 +528,47 @@ def title_for(text, session_id):
 
 
 def window_cost(reset_iso, hours):
-    """What the current limit window has cost, across every project at once."""
+    """What this rate-limit window has cost so far. Timestamps are compared as
+       datetimes, not as strings: "2026-09-08T15:00+03:00" sorts after
+       "2026-09-08T13:30Z" as text while being an hour and a half earlier."""
     try:
-        start = datetime.fromisoformat(reset_iso.replace("Z", "+00:00")) - timedelta(hours=hours)
-    except (ValueError, AttributeError):
+        reset = datetime.fromisoformat(str(reset_iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
         return 0.0
-    mark = start.isoformat()
-    total = 0.0
-    seen = set()
-    for path in glob.glob(os.path.join(HOME, ".claude/projects/*/*.jsonl")):
+    start = reset - timedelta(hours=hours)
+    seen, total = set(), 0.0
+    for path in glob.glob(os.path.join(PROJECTS_ROOT, "*", "*.jsonl")):
         try:
             if datetime.fromtimestamp(os.path.getmtime(path), timezone.utc) < start:
                 continue
+            handle = open(path, encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for row in parse(path):
-            if row.get("type") != "assistant" or (row.get("timestamp") or "") < mark:
-                continue
-            msg = row.get("message") or {}
-            usage = msg.get("usage")
-            rid = row.get("requestId") or row.get("uuid")
-            if not usage or rid in seen:
-                continue
-            seen.add(rid)
-            total += cost(usage, msg.get("model"))
+        with handle as f:
+            for line in f:
+                if '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                stamp = row.get("timestamp")
+                try:
+                    when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    continue
+                if when < start:
+                    continue
+                msg = row.get("message") or {}
+                usage, rid = msg.get("usage"), row.get("requestId") or row.get("uuid")
+                if not usage or not rid or rid in seen:
+                    continue
+                seen.add(rid)
+                total += cost(usage, msg.get("model"))
     return total
 
 
-def limit_share(lim, turn_cost, model):
+def limit_share(lim, turn_cost, _model=None):
     """This task's share of the 5-hour limit, finer than the whole percent we get.
 
     Usage arrives rounded to integers, so one percent of a window is worth
@@ -576,8 +590,8 @@ def limit_share(lim, turn_cost, model):
     return turn_cost / per_pct
 
 
-def metrics_block(turn, model, lim, share):
-    spent = [f"<b>{t('tokens')}:</b> {num(billable(turn))} \u00b7 \u2248 ${cost(turn, model):.2f}"]
+def metrics_block(turn, model, lim, share, spent_usd):
+    spent = [f"<b>{t('tokens')}:</b> {num(billable(turn))} \u00b7 \u2248 ${spent_usd:.2f}"]
     if share is not None:
         txt = f"{share:.2f}%" if share >= 0.01 else "< 0.01%"
         spent.append(f"<b>{t('share')}:</b> {txt} {t('of_window')}")
@@ -843,7 +857,7 @@ def scan_session(path):
                 first = stamp if first is None or stamp < first else first
                 last = stamp if last is None or stamp > last else last
             msg = row.get("message") or {}
-            usage, rid = msg.get("usage"), row.get("requestId")
+            usage, rid = msg.get("usage"), row.get("requestId") or row.get("uuid")
             if not usage or not rid or rid in seen:
                 continue
             seen.add(rid)
@@ -889,7 +903,7 @@ def days_since(iso):
     try:
         began = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        return 0
+        return 1
     return max(1, int((datetime.now(timezone.utc) - began).total_seconds() // 86400))
 
 
@@ -945,6 +959,8 @@ def quiet_label(secs):
     for _, key, value in MENU_STEPS:
         if value == secs:
             return t(key)
+    if secs and secs % 60 == 0:      # a custom value is always whole minutes
+        return f"{secs // 60} {t('u_min')}"
     return dur(secs)
 
 
@@ -1098,14 +1114,15 @@ def apply_choice(data):
         want = data[2:]
         if want.rstrip("!") not in {k for k, _ in TABS} | {"home"}:
             return ""
-        if want.endswith("!"):          # refresh: drop the cache, rescan
+        refreshing = want.endswith("!")
+        if refreshing:                  # rescan, but stay where we are
             want = want[:-1]
             try:
                 os.remove(SPEND_CACHE)
             except OSError:
                 pass
         # tapping the open tab again folds it away, back to the home text
-        st["view"] = "home" if want == st.get("view") else want
+        st["view"] = want if refreshing else ("home" if want == st.get("view") else want)
         st.pop("awaiting", None)
         save_state(st)
         return t("counting") if want == "spend" else ""
@@ -1136,8 +1153,12 @@ def apply_choice(data):
 
 
 def poll():
-    """Read what came in from the phone: the first hello, taps, /settings."""
+    """Read what came in from the phone: the first hello, taps, /settings.
+       Telegram serves one getUpdates per bot at a time and answers the second
+       with 409, so stand aside while an approval is being waited on."""
     if not BOT_TOKEN:
+        return
+    if os.path.exists(POLL_LOCK):
         return
     st = state()
     offset = st.get("offset", 0)
@@ -1205,6 +1226,10 @@ def poll():
             save_state(st2)
             show_menu()
     st = state()
+    for data in st.pop("queued", []) or []:
+        apply_choice(data)
+        touched = True
+    st = dict(state(), queued=[])
     st["offset"] = seen
     save_state(st)
     if touched:
@@ -1224,13 +1249,16 @@ def on_stop(data):
         try:
             start = datetime.fromisoformat(since.replace("Z", "+00:00"))
             elapsed = (datetime.now(timezone.utc) - start).total_seconds()
-        except ValueError:
+        except (ValueError, AttributeError, TypeError):
             pass
 
-    lim = limits(path)
-    share = limit_share(lim, cost(tal["turn"], tal["model"]), tal["model"])
-    for alert in limit_alerts(lim):
-        if wants("limits"):
+    # Limits are cheap to read and matter even after a two-second stop, so they
+    # come first and unconditionally.
+    lim = limits()
+    if wants("limits"):
+        # ask only when we would actually speak: limit_alerts marks a window as
+        # announced, so calling it while muted eats the one warning it had
+        for alert in limit_alerts(lim):
             send(alert)
 
     threshold = prefs()["min_seconds"]
@@ -1240,17 +1268,23 @@ def on_stop(data):
     elif elapsed < threshold or not wants("done"):
         return
 
+    # Only now the expensive part: the share of the window this turn ate is
+    # worked out by scanning every recent transcript.
+    share = limit_share(lim, tal["turn_cost"])
+
     head = ("🔴 " + t("failed")) if tal["error"] else ("🟢 " + t("done"))
     name = tab_name(path) or title_for(ctx, data.get("session_id"))
     # a failure ends on an error, not on an answer: show the error instead
-    last = (error_text(rows) if tal["error"] else "") \
+    # an untrimmed stack trace runs past Telegram's 4096 characters and the
+    # whole message fails to send — the person never learns the task died
+    last = summary(error_text(rows) if tal["error"] else "") \
         or summary(data.get("last_assistant_message") or "")
 
     msg = [
         f"<b>{head}</b>",
         f"<i>{esc(name)}</i>",
         "",
-        metrics_block(tal["turn"], tal["model"], lim, share),
+        metrics_block(tal["turn"], tal["model"], lim, share, tal["turn_cost"]),
         "",
         f"<i>{esc(model_name(tal['model']))} \u00b7 {t('ran_for')} {dur(elapsed)}</i>",
     ]
@@ -1347,7 +1381,7 @@ def limit_alerts(lim):
         reset = lim.get(reset_key) or ""
         if fired.get(key, {}).get("reset") == reset:
             continue                      # already said so for this window
-        fired[key] = {"reset": reset, "step": 100}
+        fired[key] = {"reset": reset}
         spent.append((label, reset))
     st["limit_alerts"] = fired
     save_state(st)
@@ -1358,11 +1392,11 @@ def limit_alerts(lim):
     rows = [f"🔴 <b>{t('limit_reached')}</b>", f"<i>{label}</i>", ""]
     s5, sw = lim.get("sessionUsage"), lim.get("weeklyUsage")
     if s5 is not None:
-        rows.append(f"<b>5 hours</b> {bar(s5)} {s5}% · resets in "
-                    f"{left(lim.get('sessionResetAt'))}")
+        rows.append(f"<b>{t('five_hours')}</b> {bar(s5)} {s5}% · "
+                    f"{t('resets_in')} {left(lim.get('sessionResetAt'))}")
     if sw is not None:
-        rows.append(f"<b>Week</b> {bar(sw)} {sw}% · resets in "
-                    f"{left(lim.get('weeklyResetAt'))}")
+        rows.append(f"<b>{t('week')}</b> {bar(sw)} {sw}% · "
+                    f"{t('resets_in')} {left(lim.get('weeklyResetAt'))}")
     rows.append("")
     rows.append(f"<i>{t('nothing_until')} {left(reset)}.</i>")
     return ["\n".join(rows)]
@@ -1471,6 +1505,14 @@ def ask_and_wait(text, tag):
             tap = update.get("callback_query") or {}
             data = tap.get("data", "")
             if not data.startswith("p:") or not data.endswith(f":{tag}"):
+                # somebody tapped a menu button while we were waiting; the
+                # offset moves on regardless, so keep it for poll() to apply
+                if data and from_owner(tap):
+                    stash = state()
+                    queued = stash.get("queued") or []
+                    queued.append(data)
+                    stash["queued"] = queued[-20:]
+                    save_state(stash)
                 continue
             if not from_owner(tap):
                 log("approval tap from a stranger, ignored")
