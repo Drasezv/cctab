@@ -26,14 +26,6 @@ CLAUDE_BIN = os.path.join(HOME, ".local/bin/claude")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 
-def option(name, fallback=""):
-    return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", "").strip() or fallback
-
-
-def flag(name):
-    return option(name).lower() in ("1", "true", "yes", "on")
-
-
 def saved_config():
     try:
         with open(os.path.join(DATA, "config.json")) as f:
@@ -42,7 +34,24 @@ def saved_config():
         return {}
 
 
-BOT_TOKEN = option("bot_token") or saved_config().get("bot_token", "")
+def option(name, fallback=""):
+    """Plugin settings first, then our own config. The second path matters for
+       anyone who set the plugin up by hand, and for the statusline slot, which
+       Claude Code never passes plugin options to."""
+    live = os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", "").strip()
+    if live:
+        return live
+    saved = saved_config().get(name, "")
+    if isinstance(saved, bool):
+        saved = "true" if saved else ""
+    return str(saved).strip() or fallback
+
+
+def flag(name):
+    return option(name).lower() in ("1", "true", "yes", "on")
+
+
+BOT_TOKEN = option("bot_token")
 CHAT_ID = option("chat_id")
 USE_API = flag("use_usage_api")
 NAME_TASKS = flag("name_tasks")

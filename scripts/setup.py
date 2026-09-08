@@ -82,8 +82,61 @@ def remember(token):
     os.chmod(path, 0o600)
 
 
+SETTINGS = os.path.expanduser("~/.claude/settings.json")
+WRAPPER = "~/.claude/plugins/cctab/scripts/statusline.py"
+
+
+def wire_statusline(wrapper_path):
+    """Rate limits reach the statusline slot and nowhere else, so cctab has to
+       stand in it. Whatever statusline was there keeps running, unchanged,
+       right after ours — it is remembered in our own config because Claude
+       Code passes plugin options to hooks only, never to a statusline."""
+    try:
+        with open(SETTINGS) as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        cfg = {}
+    except Exception as err:
+        return f"settings.json is unreadable ({err}), left alone"
+
+    current = cfg.get("statusLine") or {}
+    existing = (current.get("command") or "").strip()
+    if wrapper_path in existing:
+        return "already in place"
+
+    path = os.path.join(DATA, "config.json")
+    try:
+        saved = json.load(open(path))
+    except Exception:
+        saved = {}
+    if existing:
+        saved["statusline_command"] = existing
+    os.makedirs(DATA, mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(saved, f)
+    os.replace(tmp, path)
+
+    cfg["statusLine"] = {"type": "command", "command": wrapper_path}
+    tmp = SETTINGS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, SETTINGS)
+    return ("wired, and your old statusline still runs after ours"
+            if existing else "wired")
+
+
 def main():
+    if "--statusline" in sys.argv:
+        where = sys.argv[sys.argv.index("--statusline") + 1] \
+            if len(sys.argv) > sys.argv.index("--statusline") + 1 else WRAPPER
+        print(wire_statusline(where))
+        return
     token = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+    if token == "-":
+        # an argument is visible in `ps` and lands in the shell history
+        token = sys.stdin.readline().strip()
     if not token:
         name = suggest()
         print("Open @BotFather and send these three, one after another:\n")
@@ -112,7 +165,11 @@ def main():
     if art:
         print(art)
     print("Token saved, so this already works. To keep it in your system keychain")
-    print("instead of a file, paste it into the plugin's bot_token setting.")
+    print("instead of a file, paste it into the plugin's bot_token setting.\n")
+    print("One more thing, for the rate-limit numbers:")
+    print("  setup.py --statusline ~/.claude/plugins/cctab/scripts/statusline.py")
+    print("It puts cctab in the statusline slot — the only place Claude Code")
+    print("hands limits to — and keeps your own statusline running after it.")
 
 
 if __name__ == "__main__":
