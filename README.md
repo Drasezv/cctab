@@ -42,6 +42,8 @@ of the box cctab says nothing until a task has run for thirty minutes. Failures
 always come through, whatever the threshold.
 
 ![Settings, over Telegram](docs/settings.png)
+![The time tab](docs/settings-time.png)
+![The messages tab](docs/settings-messages.png)
 
 Send `/settings` to your bot and change it from wherever you are. One message,
 three tabs: how long a task must run before it counts, which messages reach you,
@@ -50,6 +52,8 @@ never fills up with old menus. No config file, no restart.
 
 `/spend` opens the third tab on its own. It reads the session transcripts, takes
 the tab names Claude Code already wrote there, and prices every one of them.
+
+![What every tab cost](docs/spend.png)
 
 ## Install
 
@@ -74,19 +78,25 @@ plugin's `bot_token` setting afterwards.
 
 ## What it looks like
 
-A task that fell over, so you know before you sit back down:
+The first thing it ever says, once the bot knows where to find you:
+
+![The first message](docs/greeting.png)
+
+A task that fell over, with the error it died on rather than the answer it never
+reached:
 
 ![A failed task](docs/task-failed.png)
 
-Something waiting on you, with the command it wants to run:
+Something waiting on you, with the command it wants to run — tap and the session
+carries on without you:
 
 ![A permission request](docs/permission.png)
 
-A question, with the options it is choosing between:
+A question it cannot answer from here, and says so:
 
 ![A question](docs/question.png)
 
-And a warning while there is still time to do something about it:
+And the moment a window runs out, said once:
 
 ![A limit warning](docs/limit.png)
 
