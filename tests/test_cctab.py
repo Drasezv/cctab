@@ -6,7 +6,9 @@
    Run: python3 tests/test_cctab.py
 """
 import importlib.util
+import io
 import json
+import urllib.parse
 import os
 import re
 import sys
@@ -84,6 +86,17 @@ class Money(Base):
     def test_unknown_model_falls_back(self):
         turn = {"input_tokens": 1_000_000, "output_tokens": 0}
         self.assertAlmostEqual(self.m.cost(turn, "claude-something-new"), 5.0, places=6)
+
+    def test_sonnet_versions_are_priced_apart(self):
+        """Sonnet 5 is $2/$10 and Sonnet 4.6 is $3/$15. A substring match on
+           "sonnet" billed the newer one at the older one's rate."""
+        million_in = {"input_tokens": 1_000_000, "output_tokens": 0}
+        self.assertAlmostEqual(self.m.cost(million_in, "claude-sonnet-5"), 2.0, places=6)
+        self.assertAlmostEqual(self.m.cost(million_in, "claude-sonnet-4-6"), 3.0, places=6)
+        million_out = {"input_tokens": 0, "output_tokens": 1_000_000}
+        self.assertAlmostEqual(self.m.cost(million_out, "claude-sonnet-5"), 10.0, places=6)
+        self.assertAlmostEqual(self.m.cost(million_out, "claude-haiku-4-5"), 5.0, places=6)
+        self.assertAlmostEqual(self.m.cost(million_out, "claude-fable-5-1"), 50.0, places=6)
 
     def test_money_keeps_cents_only_where_they_matter(self):
         self.assertEqual(self.m.money(0.92), "$0.92")
@@ -242,26 +255,43 @@ class Limits(Base):
 
 
 class Approvals(Base):
-    def test_answer_carries_both_spellings(self):
-        """The docs name this field two different ways; we answer to both."""
+    def test_decision_is_an_object_with_a_behavior(self):
+        """Claude Code reads `decision.behavior`. A bare string carries no
+           decision at all, and the ask falls through to the terminal."""
+        self.assertEqual(self.m.verdict("allow"),
+                         {"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                                 "decision": {"behavior": "allow"}}})
+        denied = self.m.verdict("deny", "no thanks")
+        self.assertEqual(denied["hookSpecificOutput"]["decision"],
+                         {"behavior": "deny", "message": "no thanks"})
+
+    def test_no_answer_leaves_the_flow_alone(self):
+        """Declining to decide means sending no decision, not inventing one."""
+        self.assertNotIn("decision", self.m.verdict("")["hookSpecificOutput"])
+        self.state["prefs"] = {"events": {"approve": True}}
         self.m.APPROVE_WAIT = 0
         got = self.m.on_permission_request(
             {"tool_name": "Bash", "transcript_path": "",
              "tool_input": {"command": "ls"}, "tool_use_id": "toolu_1"})
-        block = got["hookSpecificOutput"]
-        self.assertEqual(block["hookEventName"], "PermissionRequest")
-        self.assertEqual(block["decision"], "prompt")
-        self.assertEqual(block["permissionDecision"], "prompt")
+        self.assertEqual(got["hookSpecificOutput"]["hookEventName"], "PermissionRequest")
+        self.assertNotIn("decision", got["hookSpecificOutput"])
+
+    def test_approvals_are_off_until_asked_for(self):
+        """On by default would mean every permission prompt in every session
+           pauses for a minute while the hook waits on a phone."""
+        self.assertFalse(self.m.prefs()["events"]["approve"])
+        self.assertTrue(self.m.prefs()["events"]["done"])
 
     def test_switched_off_means_straight_to_the_terminal(self):
         self.state["prefs"] = {"events": {"approve": False}}
         got = self.m.on_permission_request(
             {"tool_name": "Bash", "transcript_path": "",
              "tool_input": {"command": "ls"}, "tool_use_id": "toolu_1"})
-        self.assertEqual(got["hookSpecificOutput"]["decision"], "prompt")
+        self.assertNotIn("decision", got["hookSpecificOutput"])
         self.assertEqual(self.calls, [], "выключенная фича не должна писать в чат")
 
     def test_the_command_is_shown(self):
+        self.state["prefs"] = {"events": {"approve": True}}
         self.m.APPROVE_WAIT = 0
         self.m.on_permission_request(
             {"tool_name": "Bash", "transcript_path": "",
@@ -370,6 +400,7 @@ class Security(Base):
             self.assertEqual(self.m.redact(safe), safe)
 
     def test_every_ask_gets_its_own_tag(self):
+        self.state["prefs"] = {"events": {"approve": True}}
         self.m.APPROVE_WAIT = 0
         tags = set()
         for _ in range(5):
@@ -386,6 +417,174 @@ class Security(Base):
         self.assertEqual(self.state["prefs"].get("events", {}), {})
         self.m.apply_choice("v:nonsense")
         self.assertNotEqual(self.state.get("view"), "nonsense")
+
+
+class EndToEnd(unittest.TestCase):
+    """The earlier classes stub `state` and `send`, which means a broken
+       `on_stop`, `poll` or `send` slipped through green. These drive the hook
+       the way Claude Code does — real stdin, real state file on disk — and
+       replace only the network."""
+
+    def setUp(self):
+        self.m = load()
+        self.tmp = tempfile.mkdtemp()
+        self.m.DATA = self.tmp
+        self.m.STATE_FILE = os.path.join(self.tmp, "state.json")
+        self.m.STATE_LOCK = os.path.join(self.tmp, "state.lock")
+        self.m.LOG_FILE = os.path.join(self.tmp, "log")
+        self.m.SPEND_CACHE = os.path.join(self.tmp, "spend.json")
+        self.m.POLL_LOCK = os.path.join(self.tmp, "poll.lock")
+        self.m.LIMITS_CACHE = os.path.join(self.tmp, "limits.json")
+        self.m.PROJECTS_ROOT = os.path.join(self.tmp, "projects")
+        self.m.BOT_TOKEN = "test-token"
+        self.m.CHAT_ID = "1"
+        self.m.USE_API = False
+        self.posted = []
+        self.updates = []
+
+        def fake_api(method, payload):
+            self.posted.append((method, payload))
+            return {"result": {"message_id": len(self.posted)}}
+
+        self.m.api = fake_api
+        self.m.limits = lambda *a: {}
+        self.m.window_cost = lambda *a: 0.0
+
+        def fake_urlopen(url, **kw):
+            """`send` posts through urllib directly, so the recorder has to sit
+               here rather than on `api` — that gap is why a dead `send` used
+               to pass the suite."""
+            target = getattr(url, "full_url", url)
+            if hasattr(url, "data") and url.data:
+                fields = urllib.parse.parse_qs(url.data.decode())
+                self.posted.append(("sendMessage" if "sendMessage" in target
+                                    else target.rsplit("/", 1)[-1],
+                                    {k: v[0] for k, v in fields.items()}))
+                return io.BytesIO(json.dumps(
+                    {"ok": True, "result": {"message_id": len(self.posted)}}).encode())
+            return io.BytesIO(json.dumps({"ok": True, "result": self.updates}).encode())
+
+        self.m.urllib.request.urlopen = fake_urlopen
+
+    def transcript(self, minutes_ago, tokens=50000, error=False):
+        began = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+        rows = [
+            {"type": "ai-title", "aiTitle": "a real tab"},
+            {"type": "user", "timestamp": began,
+             "message": {"content": "please do the long thing for me"}},
+            {"type": "assistant", "requestId": "r1", "timestamp": began,
+             "message": {"model": "claude-opus-5",
+                         "usage": {"input_tokens": 10, "output_tokens": tokens,
+                                   "cache_creation_input_tokens": 0,
+                                   "cache_read_input_tokens": 0}}},
+        ]
+        if error:
+            rows.append({"type": "user", "isApiErrorMessage": True, "timestamp": began,
+                         "message": {"content": [{"type": "text",
+                                                  "text": "API Error: 529 overloaded"}]}})
+        path = os.path.join(self.tmp, "t.jsonl")
+        with open(path, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+        return path
+
+    def fire(self, payload):
+        """Feed the hook on stdin, exactly as Claude Code does."""
+        saved_stdin, saved_env = sys.stdin, os.environ.get("CC_TG_BG")
+        os.environ["CC_TG_BG"] = "1"          # stay in-process, do not detach
+        sys.stdin = io.StringIO(json.dumps(payload))
+        try:
+            self.m.run()
+        finally:
+            sys.stdin = saved_stdin
+            if saved_env is None:
+                os.environ.pop("CC_TG_BG", None)
+
+    def sent_texts(self):
+        return [p[1].get("text", "") for p in self.posted
+                if isinstance(p[1], dict) and p[1].get("text")]
+
+    def test_a_long_task_is_announced_with_its_cost(self):
+        self.fire({"hook_event_name": "Stop", "session_id": "s",
+                   "transcript_path": self.transcript(45),
+                   "last_assistant_message": "all done"})
+        texts = [t for t in self.sent_texts() if t]
+        self.assertTrue(texts, "о длинной задаче обязано прийти сообщение")
+        self.assertIn("TASK DONE", texts[-1])
+        self.assertIn("$", texts[-1], "в сообщении должна быть цена")
+        self.assertIn("a real tab", texts[-1])
+
+    def test_a_short_task_says_nothing(self):
+        """The whole pitch is silence under the threshold."""
+        self.fire({"hook_event_name": "Stop", "session_id": "s",
+                   "transcript_path": self.transcript(2),
+                   "last_assistant_message": "quick one"})
+        self.assertEqual([t for t in self.sent_texts() if t], [])
+
+    def test_a_failure_speaks_however_short_it_was(self):
+        self.fire({"hook_event_name": "Stop", "session_id": "s",
+                   "transcript_path": self.transcript(1, error=True),
+                   "last_assistant_message": ""})
+        texts = [t for t in self.sent_texts() if t]
+        self.assertTrue(texts, "об упавшей задаче сообщают всегда")
+        self.assertIn("TASK FAILED", texts[-1])
+        self.assertIn("529", texts[-1], "нужен текст ошибки, а не пустое соболезнование")
+
+    def test_the_threshold_from_the_phone_is_obeyed(self):
+        self.m.save_state({"chat_id": "1", "prefs": {"min_seconds": 60}})
+        self.fire({"hook_event_name": "Stop", "session_id": "s",
+                   "transcript_path": self.transcript(5),
+                   "last_assistant_message": "five minutes of work"})
+        self.assertTrue([t for t in self.sent_texts() if t],
+                        "порог 1 минута — пятиминутная задача должна пройти")
+
+    def test_a_menu_tap_from_the_owner_is_applied(self):
+        self.m.save_state({"chat_id": "1", "menu_id": 7})
+        self.updates = [{"update_id": 1, "callback_query": {
+            "id": "c1", "data": "q:300", "from": {"id": 1},
+            "message": {"message_id": 7, "chat": {"id": 1}}}}]
+        self.m.poll()
+        self.assertEqual(self.m.state()["prefs"]["min_seconds"], 300)
+
+    def test_a_tap_from_a_stranger_changes_nothing(self):
+        self.m.save_state({"chat_id": "1"})
+        self.updates = [{"update_id": 1, "callback_query": {
+            "id": "c1", "data": "q:300", "from": {"id": 999},
+            "message": {"message_id": 7, "chat": {"id": 999}}}}]
+        self.m.poll()
+        self.assertEqual(self.m.state().get("prefs", {}).get("min_seconds"), None)
+
+    def test_the_first_hello_captures_the_chat_and_greets(self):
+        self.m.CHAT_ID = ""
+        self.updates = [{"update_id": 1, "message": {
+            "text": "hi", "chat": {"id": 4242},
+            "from": {"id": 4242, "language_code": "ru"}}}]
+        self.m.poll()
+        self.assertEqual(self.m.state()["chat_id"], "4242")
+        self.assertEqual(self.m.state()["tg_lang"], "ru")
+        self.assertTrue(any("Подключено" in t or "Connected" in t
+                            for t in self.sent_texts()))
+
+    def test_a_stop_with_a_missing_transcript_stays_quiet_and_alive(self):
+        self.fire({"hook_event_name": "Stop", "session_id": "s",
+                   "transcript_path": "/nowhere.jsonl", "last_assistant_message": ""})
+        self.assertEqual([t for t in self.sent_texts() if t], [])
+
+    def test_a_crash_is_written_down_rather_than_swallowed(self):
+        """The child runs with stderr closed. Before this, an unhandled error
+           meant notifications simply stopped with nothing to explain why."""
+        def boom():
+            raise RuntimeError("boom")
+        self.m.run = boom
+        self.m.main()          # must not raise
+        with open(self.m.LOG_FILE) as f:
+            written = f.read()
+        self.assertIn("crashed", written)
+        self.assertIn("boom", written)
+
+    def test_an_over_long_message_is_trimmed_not_dropped(self):
+        self.assertEqual(len(self.m.clamp("x" * 9000)), self.m.TELEGRAM_MAX + 1)
+        self.assertEqual(self.m.clamp("short"), "short")
 
 
 if __name__ == "__main__":

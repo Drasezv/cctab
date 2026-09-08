@@ -12,22 +12,37 @@ tells you the price while it is at it.
 
 ## What makes it different
 
-Twenty-odd projects send Claude Code notifications. None of them put money in
-the message, because Claude Code does not hand cost to hooks
-([#11008](https://github.com/anthropics/claude-code/issues/11008)) and you have
-to read the session transcripts yourself to work it out.
+A hundred-odd projects notify you when Claude Code finishes. Several do parts of
+what cctab does, and one does the headline feature: **RichardAtCT/claude-code-telegram**
+(2.8k stars) appends the turn's cost to its replies. Others cover a piece each —
+[echook](https://github.com/ChanMeng666/echook) reports rate-limit headroom and
+holds back on short tasks, [ccgram](https://github.com/jsayubi/ccgram) does
+limits and approval buttons, [tg-claude-bot](https://github.com/xhyumiracle/tg-claude-bot)
+does usage bars and settings from the phone,
+[Lucarne](https://github.com/tuchg/Lucarne) and
+[claude-ntfy-hook](https://github.com/nickknissen/claude-ntfy-hook) do approvals.
+Anthropic's own [Channels](https://code.claude.com/docs/en/channels) relays
+permission prompts to Telegram and Discord.
 
-| | cctab | Typical notifier | Official Telegram channel |
-|---|---|---|---|
-| Says a task finished | yes | yes | no, it answers you in chat |
-| Dollars spent | **yes** | no | no |
-| Rate limit left | **yes** | no | no |
-| What each tab cost | **yes** | no | no |
-| Silent on short tasks | **yes** | no | n/a |
-| Settings from your phone | **yes** | no | no |
-| Approve a tool from your phone | yes, two buttons | no | yes, by typing a reply code |
-| What it takes to run | a hook | a hook | Bun, an MCP server, `--channels` |
-| Token in the system keychain | yes | usually a plain file | yes |
+What I could not find anywhere is all of it in one hook: money, limit headroom,
+per-tab spend, a quiet threshold, approval buttons, and settings you change from
+the phone — with no server, no MCP process and no runtime beyond Python.
+
+| | cctab | Official Telegram channel |
+|---|---|---|
+| Says a long task finished | yes | no, it answers you in chat |
+| Dollars spent, unprompted | yes | no |
+| Rate limit left | yes | no |
+| What each tab cost | yes | no |
+| Silent on short tasks | yes | n/a |
+| Settings from your phone | yes | no |
+| Approve a tool from your phone | yes, two buttons | yes, by typing a reply code |
+| What it takes to run | a hook | Bun, an MCP server, `--channels` |
+
+Cost is the awkward one to build, which is why most projects skip it: Claude Code
+does not hand cost to hooks
+([#11008](https://github.com/anthropics/claude-code/issues/11008)), so it has to
+be worked out from the session transcripts, per request, per model.
 
 The official Telegram channel is a chat bridge that can also
 [relay permission prompts](https://code.claude.com/docs/en/channels-reference#relay-permission-prompts)

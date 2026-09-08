@@ -20,6 +20,7 @@ os.umask(0o077)          # what we write is nobody else's business
 HOME = os.path.expanduser("~")
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.join(HOME, ".cctab")
 STATE_FILE = os.path.join(DATA, "state.json")
+STATE_LOCK = os.path.join(DATA, "state.lock")
 LOG_FILE = os.path.join(DATA, "cctab.log")
 LIMITS_CACHE = os.path.join(DATA, "limits.json")
 CLAUDE_BIN = os.path.join(HOME, ".local/bin/claude")
@@ -68,7 +69,37 @@ ERROR_WINDOW = 8     # how far back a failure may sit and still count
 
 TELEGRAM_API = "https://api.telegram.org/bot"
 
-PRICES = {"opus": (5.0, 25.0), "sonnet": (3.0, 15.0), "haiku": (1.0, 5.0), "fable": (10.0, 50.0)}
+# Dollars per million tokens, as published by Anthropic. Matched longest id
+# first: "sonnet-5" and "sonnet-4-6" are different prices, and a substring
+# match on "sonnet" would quietly bill one at the other's rate.
+PRICES = {
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-mythos-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-opus-4-5": (5.0, 25.0),
+    "claude-opus-4-1": (15.0, 75.0),
+    "claude-opus-4": (15.0, 75.0),
+    "claude-sonnet-4-5": (3.0, 15.0),
+    "claude-sonnet-4": (3.0, 15.0),
+    "claude-haiku-4": (1.0, 5.0),
+    "claude-3-7-sonnet": (3.0, 15.0),
+    "claude-3-5-haiku": (0.8, 4.0),
+    "claude-3-5-sonnet": (3.0, 15.0),
+    "claude-3-opus": (15.0, 75.0),
+    "claude-3-haiku": (0.25, 1.25),
+}
+
+# Rates for anything not in the table. Guessing high would inflate the bill on
+# an unknown model; guessing low would hide it. These are the mid-tier rates,
+# and an unknown id is worth saying out loud rather than pricing silently.
+FALLBACK_PRICE = (5.0, 25.0)
 
 TITLE_PROMPT = (
     "Below is how a working session began. Name the thing being worked on. "
@@ -110,7 +141,19 @@ def chat_id():
     return ""
 
 
+TELEGRAM_MAX = 4000      # the hard limit is 4096; leave room for the ellipsis
+
+
+def clamp(text):
+    """Telegram rejects anything past 4096 characters outright, and a rejected
+       message is a message the person never sees — which is the one failure
+       this plugin exists to prevent."""
+    text = str(text)
+    return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX] + "…"
+
+
 def send(text):
+    text = clamp(text)
     token, chat = BOT_TOKEN, chat_id()
     if not token or not chat:
         return
@@ -156,11 +199,28 @@ def state():
 
 
 def save_state(s):
+    """Two Claude Code tabs write this file at the same time — the plugin is
+       named after tabs, so that is the normal case. A shared temp name meant
+       one process moved the other's file out from under it; a per-process name
+       and a lock around the swap keep both alive."""
     os.makedirs(os.path.dirname(STATE_FILE), mode=0o700, exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(s, f, ensure_ascii=False)
-    os.replace(tmp, STATE_FILE)
+    tmp = f"{STATE_FILE}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False)
+        with open(STATE_LOCK, "w") as lock:
+            try:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass                       # Windows: the atomic replace alone
+            os.replace(tmp, STATE_FILE)
+    except OSError as err:
+        log(f"could not save state: {err}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 SECRET_RE = re.compile(
@@ -240,11 +300,28 @@ def model_name(model_id):
     return m.title() if m else "unknown model"
 
 
+UNPRICED = set()
+
+
 def price_for(model_id):
-    for key, val in PRICES.items():
-        if key in (model_id or ""):
-            return val
-    return PRICES["opus"]
+    """Longest matching id wins, so claude-sonnet-5 is never priced as 4.6.
+       Bedrock and Vertex dress the same model as `us.anthropic.claude-…-v1:0`
+       or `claude-…@20250929`; strip that before matching or the whole family
+       falls through to the fallback rate."""
+    name = (model_id or "").strip()
+    for prefix in ("us.anthropic.", "eu.anthropic.", "apac.anthropic.",
+                   "global.anthropic.", "anthropic."):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    name = name.split("@")[0].rsplit("-v", 1)[0] if "@" in name or name.endswith(":0") else name
+    for key in sorted(PRICES, key=len, reverse=True):
+        if name.startswith(key):
+            return PRICES[key]
+    if name and name not in UNPRICED:
+        UNPRICED.add(name)          # once per model, not once per usage row
+        log(f"unknown model {name}, priced at fallback rates")
+    return FALLBACK_PRICE
 
 
 def parse(path):
@@ -951,12 +1028,19 @@ APPROVE_WAIT = 60        # how long an approval button stays worth pressing
 APPROVE_POLL = 2
 
 
+# Approvals are the one event that is off until asked for: answering from the
+# phone means the hook holds the session while it waits, and nobody should
+# discover that by having their terminal pause for a minute.
+EVENT_DEFAULTS = {"approve": False}
+
+
 def prefs():
     """What the user picked in the bot, falling back to plugin config."""
     saved = state().get("prefs") or {}
     out = {"min_seconds": saved.get("min_seconds", MIN_SECONDS)}
     events = saved.get("events") or {}
-    out["events"] = {key: events.get(key, True) for key, _, _ in EVENTS}
+    out["events"] = {key: events.get(key, EVENT_DEFAULTS.get(key, True))
+                     for key, _, _ in EVENTS}
     return out
 
 
@@ -1340,13 +1424,13 @@ def on_notification(data):
         if not wants("question"):
             return
         head = f"🟠 <b>{t('wants_answer')}</b>"
-        body = f"<blockquote>{esc(question)}</blockquote>"
+        body = f"<blockquote>{esc(question[:600])}</blockquote>"
         if opts:
             # each choice on its own line: a slash-joined string read as one
             # long option and the descriptions had nowhere to go
             picks = []
             for i, o in enumerate(opts, 1):
-                block = f"<b>{i}. {esc(o.get('label', ''))}</b>"
+                block = f"<b>{i}. {esc((o.get('label') or '')[:120])}</b>"
                 note = (o.get("description") or "").strip()
                 if note:
                     block += f"\n<i>{esc(note[:90])}</i>"
@@ -1455,13 +1539,21 @@ def from_owner(tap):
     return owner in (who, where)
 
 
-def verdict(decision):
-    """Both spellings on purpose. The docs call this field `decision` in one
-       place and `permissionDecision` in another; whichever Claude Code reads,
-       it finds the same answer, and the spare key is ignored."""
+def verdict(behavior, message=""):
+    """`decision` is an object, not a string. Claude Code reads
+       `hookSpecificOutput.decision.behavior`, so a bare "allow" carries no
+       decision at all and the ask quietly falls through to the terminal —
+       which is exactly what it did until this was found.
+
+       Saying nothing is how a hook declines to decide: an absent `decision`
+       leaves the normal permission flow untouched."""
+    if behavior not in ("allow", "deny"):
+        return {"hookSpecificOutput": {"hookEventName": "PermissionRequest"}}
+    block = {"behavior": behavior}
+    if message:
+        block["message"] = message
     return {"hookSpecificOutput": {"hookEventName": "PermissionRequest",
-                                   "decision": decision,
-                                   "permissionDecision": decision}}
+                                   "decision": block}}
 
 
 def ask_and_wait(text, tag):
@@ -1504,8 +1596,9 @@ def ask_and_wait(text, tag):
             body = json.loads(raw)
         except Exception as err:
             misses += 1
-            log(f"approval poll failed: {err}")
-            if misses >= 3:
+            if misses in (1, 10):        # one line, not one per retry
+                log(f"approval poll failed: {err}")
+            if misses >= 20:
                 break
             time.sleep(APPROVE_POLL)
             continue
@@ -1532,6 +1625,7 @@ def ask_and_wait(text, tag):
             api("answerCallbackQuery", {"callback_query_id": tap.get("id"),
                                         "text": picked})
         if not picked:
+            misses = 0                   # a good round clears the streak
             time.sleep(APPROVE_POLL)
 
     if holds_poll_lock(tag):
@@ -1555,7 +1649,7 @@ def on_permission_request(data):
        ever carry a yes or a no: nothing can be typed into the session from the
        phone, so a stolen chat cannot compose its own commands."""
     if not BOT_TOKEN or not wants("approve"):
-        return verdict("prompt")
+        return verdict("")
     tool = data.get("tool_name") or ""
     args = data.get("tool_input") or {}
     detail = args.get("command") or args.get("file_path") or args.get("url") or ""
@@ -1578,8 +1672,8 @@ def on_permission_request(data):
     picked = ask_and_wait(text, secrets.token_urlsafe(6))
     if picked in ("allow", "deny"):
         log(f"approval {picked} for {tool}")
-        return verdict(picked)
-    return verdict("prompt")
+        return verdict(picked, "" if picked == "allow" else "Denied from Telegram")
+    return verdict("")
 
 
 def detach(payload):
@@ -1597,6 +1691,17 @@ def detach(payload):
 
 
 def main():
+    try:
+        run()
+    except Exception as err:
+        # The child runs with stderr closed, so an unhandled error used to
+        # vanish completely: notifications simply stopped and there was
+        # nothing anywhere to explain why.
+        import traceback
+        log("crashed: " + traceback.format_exc(limit=6).replace("\n", " | "))
+
+
+def run():
     raw = sys.stdin.read()
     try:
         data = json.loads(raw)
