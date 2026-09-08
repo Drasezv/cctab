@@ -589,5 +589,63 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.m.clamp("short"), "short")
 
 
+class LastRound(Base):
+    """what the final hunt found"""
+
+    def rows(self, *items):
+        return [dict(type="user", timestamp=ts, message={"content": txt}) for ts, txt in items]
+
+    def test_an_agent_report_starts_a_new_turn(self):
+        """a reply to a task-notification is a short turn, not the old long one"""
+        old = "2026-09-08T10:00:00Z"
+        new = "2026-09-08T10:31:00Z"
+        rows = self.rows((old, "do the big thing"), (new, "<task-notification>done</task-notification>"))
+        text, since = self.m.last_request(rows)
+        self.assertEqual(text, "do the big thing")
+        self.assertEqual(since, new)
+
+    def test_tool_results_do_not_count_as_messages(self):
+        rows = [dict(type="user", timestamp="2026-09-08T10:00:00Z", message={"content": "go"}),
+                dict(type="user", timestamp="2026-09-08T10:20:00Z",
+                     message={"content": [{"type": "tool_result", "content": "ok"}]})]
+        self.assertEqual(self.m.last_request(rows)[1], "2026-09-08T10:00:00Z")
+
+    def test_synthetic_rows_do_not_name_the_model(self):
+        rows = [dict(type="assistant", requestId="a", timestamp="2026-09-08T10:00:00Z",
+                     message={"model": "claude-opus-5", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+                dict(type="assistant", requestId="b", timestamp="2026-09-08T10:00:01Z",
+                     message={"model": "<synthetic>", "usage": {"input_tokens": 0, "output_tokens": 0}})]
+        self.assertEqual(self.m.tally(rows, None)["model"], "claude-opus-5")
+
+    def test_unicode_digits_are_not_minutes(self):
+        import re
+        for bad in ("\u00b2", "\u2460", "\u2075", "abc", "-30", "+30"):
+            self.assertIsNone(re.fullmatch(r"[0-9]{1,5}m?", bad))
+        self.assertIsNotNone(re.fullmatch(r"[0-9]{1,5}m?", "30m"))
+
+    def test_naive_times_are_treated_as_utc(self):
+        got = self.m.parse_time("2026-09-08T10:00:00")
+        self.assertIsNotNone(got.tzinfo)
+        self.assertEqual(self.m.left("2026-09-08T10:00:00"), self.m.t("any_moment"))
+
+    def test_negative_threshold_is_refused(self):
+        self.assertEqual(self.m.apply_choice("q:-100"), "")
+        self.assertNotIn("min_seconds", self.state["prefs"])
+
+    def test_double_bang_refresh_stays_on_spend(self):
+        self.state["view"] = "spend"
+        self.m.apply_choice("v:spend!!")
+        self.assertEqual(self.state["view"], "spend")
+
+    def test_more_secret_shapes_are_redacted(self):
+        for leak in ("sshpass -p Hunter2 ssh box", "mysql -u root -pS3cret db",
+                     "PrivateKey = abc123def456", "vless://uuid@host:443",
+                     "aws_secret_access_key wJalrXUtnFEMI"):
+            self.assertIn("[redacted]", self.m.redact(leak), leak)
+
+    def test_negative_elapsed_never_shows(self):
+        self.assertEqual(self.m.dur(-3605), self.m.dur(0))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

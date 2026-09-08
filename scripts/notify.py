@@ -196,6 +196,13 @@ def state():
         return {"offset": -1}
 
 
+def stash(key, value):
+    """set one key on a fresh read, so a slow caller does not clobber others"""
+    st = state()
+    st[key] = value
+    save_state(st)
+
+
 def save_state(s):
     """two tabs may write at once, so tmp per pid + lock"""
     os.makedirs(os.path.dirname(STATE_FILE), mode=0o700, exist_ok=True)
@@ -228,6 +235,12 @@ SECRET_RE = re.compile(
     r"|\d{8,10}:AA[\w-]{30,}"                      # Telegram bot token
     r"|(?:password|passwd|token|secret|api[_-]?key|bearer)\s*[=:]\s*\S+"
     r"|://[^/\s:@]+:[^@\s]+@"                      # user:pass in a URL
+    r"|\bsshpass\s+-p\s*\S+"
+    r"|\bmysql\w*\s[^\n]*?\s-p\S+"
+    r"|\b(?:docker|helm|npm|gh)\s+login[^\n]*?(?:-p|--password|--password-stdin)[=\s]+\S+"
+    r"|\bPrivateKey\s*=\s*\S+"
+    r"|\b(?:vless|vmess|trojan|ss)://\S+"
+    r"|\baws_secret_access_key\s*[=:\s]\s*\S+"
     r")")
 
 
@@ -246,7 +259,7 @@ def num(n):
 
 
 def dur(sec, short=False):
-    sec = int(sec)
+    sec = max(0, int(sec))
     if sec < 60:
         return f"{sec}{t('u_s')}" if short else f"{sec} {t('u_sec')}"
     if sec < 3600:
@@ -271,16 +284,21 @@ def bar(pct, width=10):
     return "▰" * int(round(pct / 100 * width)) + "▱" * (width - int(round(pct / 100 * width)))
 
 
+def parse_time(value):
+    """iso or epoch -> aware datetime; ValueError if it is neither"""
+    if value is None or value == "":
+        raise ValueError("empty")
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), timezone.utc)
+    got = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return got if got.tzinfo else got.replace(tzinfo=timezone.utc)
+
+
 def left(when):
     """time left until reset"""
-    if when is None or when == "":
-        return "?"
     try:
-        if isinstance(when, (int, float)):
-            target = datetime.fromtimestamp(float(when), timezone.utc)
-        else:
-            target = datetime.fromisoformat(str(when).replace("Z", "+00:00"))
-    except (ValueError, OSError, OverflowError):
+        target = parse_time(when)
+    except (ValueError, TypeError, OSError, OverflowError):
         return "?"
     sec = (target - datetime.now(timezone.utc)).total_seconds()
     return dur(sec, short=True) if sec > 0 else t("any_moment")
@@ -306,7 +324,7 @@ def price_for(model_id):
     for key in sorted(PRICES, key=len, reverse=True):
         if name.startswith(key):
             return PRICES[key]
-    if name and name not in UNPRICED:
+    if name and not name.startswith("<") and name not in UNPRICED:
         UNPRICED.add(name)          # once per model, not once per usage row
         log(f"unknown model {name}, priced at fallback rates")
     return FALLBACK_PRICE
@@ -339,14 +357,20 @@ def user_text(row):
 
 
 def last_request(rows):
-    """last real user message and its timestamp"""
+    """text of the last human message; timestamp of the last text message of any kind"""
+    text, since = "", None
     for row in reversed(rows):
         if row.get("type") != "user" or row.get("isSidechain"):
             continue
-        text = user_text(row).strip()
-        if text and not text.startswith("<"):
-            return text, row.get("timestamp")
-    return "", None
+        body = user_text(row).strip()
+        if not body:
+            continue                      # tool results have no text
+        if since is None:
+            since = row.get("timestamp")  # a task-notification counts here
+        if not body.startswith("<"):
+            text = body
+            break
+    return text, since
 
 
 def title_context(rows):
@@ -391,7 +415,7 @@ def tally(rows, since):
         if not usage or rid in seen:
             continue
         seen.add(rid)
-        if msg.get("model"):
+        if msg.get("model") and not msg["model"].startswith("<"):
             res["model"] = msg["model"]
         if not since or (row.get("timestamp") or "") >= since:
             bucket = res["turn"]
@@ -490,8 +514,7 @@ def api_limits():
         log(f"usage api failed: {err}")
         return {}
     out = read_windows(body, ("utilization", "used_percentage"))
-    st["usage_api"] = {"at": time.time(), "data": out}
-    save_state(st)
+    stash("usage_api", {"at": time.time(), "data": out})
     return out
 
 
@@ -509,8 +532,7 @@ def cli_version():
                 ver = found.group(0)
         except Exception:
             pass
-    st["cli_version"] = ver
-    save_state(st)
+    stash("cli_version", ver)
     return ver
 
 
@@ -576,6 +598,8 @@ def title_for(text, session_id):
             space = title.rfind(" ")
             title = (title[:space] if space > 20 else title).rstrip(" ,.:;-") + "..."
 
+    st = state()                      # re-read: the haiku call took a while
+    cache = st.get("titles", {})
     cache[key] = title
     st["titles"] = dict(list(cache.items())[-40:])
     save_state(st)
@@ -585,7 +609,7 @@ def title_for(text, session_id):
 def window_cost(reset_iso, hours):
     """cost of everything in the current window"""
     try:
-        reset = datetime.fromisoformat(str(reset_iso).replace("Z", "+00:00"))
+        reset = parse_time(reset_iso)
     except (ValueError, TypeError):
         return 0.0
     start = reset - timedelta(hours=hours)
@@ -607,7 +631,7 @@ def window_cost(reset_iso, hours):
                     continue
                 stamp = row.get("timestamp")
                 try:
-                    when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                    when = parse_time(stamp)
                 except (ValueError, TypeError):
                     continue
                 if when < start:
@@ -626,12 +650,15 @@ def limit_share(lim, turn_cost, _model=None):
     st = state()
     used = lim.get("sessionUsage")
     per_pct = st.get("dollars_per_pct")
-    if used and used >= 1:
+    try:
+        used = float(used or 0)
+    except (TypeError, ValueError):
+        used = 0
+    if used >= 1:
         spent = window_cost(lim.get("sessionResetAt"), 5)
         if spent > 0:
             per_pct = spent / used
-            st["dollars_per_pct"] = per_pct
-            save_state(st)
+            stash("dollars_per_pct", per_pct)
     if not per_pct:
         return None
     return turn_cost / per_pct
@@ -939,7 +966,7 @@ def scan_all():
 
 def days_since(iso):
     try:
-        began = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        began = parse_time(iso)
     except (ValueError, TypeError):
         return 1
     return max(1, int((datetime.now(timezone.utc) - began).total_seconds() // 86400))
@@ -1146,7 +1173,7 @@ def apply_choice(data):
             return ""
         refreshing = want.endswith("!")
         if refreshing:                  # rescan, but stay where we are
-            want = want[:-1]
+            want = want.rstrip("!")
             try:
                 os.remove(SPEND_CACHE)
             except OSError:
@@ -1162,9 +1189,12 @@ def apply_choice(data):
         return t("send_minutes")
     if data.startswith("q:"):
         try:
-            saved["min_seconds"] = int(data[2:])
+            secs = int(data[2:])
         except ValueError:
             return ""
+        if secs < 0:
+            return ""
+        saved["min_seconds"] = secs
         st["prefs"] = saved
         st.pop("awaiting", None)
         save_state(st)
@@ -1188,7 +1218,29 @@ def poll():
     if not BOT_TOKEN:
         return
     if os.path.exists(POLL_LOCK):
-        return
+        try:
+            if time.time() - os.path.getmtime(POLL_LOCK) < APPROVE_WAIT * 2:
+                return
+            os.remove(POLL_LOCK)      # waiter died and left it behind
+        except OSError:
+            return
+    mutex = None
+    try:
+        import fcntl
+        mutex = open(POLL_MUTEX, "w")
+        fcntl.flock(mutex, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (ImportError, AttributeError):
+        pass                          # windows: no flock, rely on offsets
+    except OSError:
+        return                        # another tab is polling right now
+    try:
+        poll_once()
+    finally:
+        if mutex:
+            mutex.close()
+
+
+def poll_once():
     st = state()
     offset = st.get("offset", 0)
     try:
@@ -1205,10 +1257,30 @@ def poll():
     touched = False
     for update in body.get("result", []):
         seen = update.get("update_id", seen - 1) + 1
+        try:
+            handle_update(update)
+        except Exception as err:
+            log(f"bad update skipped: {err}")   # never leave one stuck in the queue
+        else:
+            if update.get("callback_query"):
+                touched = True
+    st = state()
+    for data in st.pop("queued", []) or []:
+        apply_choice(data)
+        touched = True
+    st = dict(state(), queued=[])
+    st["offset"] = seen
+    save_state(st)
+    if touched:
+        show_menu(state().get("menu_id"))
+
+
+def handle_update(update):
+    if True:
         tap = update.get("callback_query")
         if tap:
             if not from_owner(tap):
-                continue
+                return
             data = tap.get("data", "")
             if data.startswith("p:"):
                 # an approval waiter needs this tap; pass it through state
@@ -1221,11 +1293,10 @@ def poll():
                     save_state(st3)
                     api("answerCallbackQuery", {"callback_query_id": tap.get("id"),
                                                 "text": parts[1]})
-                continue
+                return
             note = apply_choice(data)
-            api("answerCallbackQuery", {"callback_query_id": tap["id"], "text": note})
-            touched = True
-            continue
+            api("answerCallbackQuery", {"callback_query_id": tap.get("id"), "text": note})
+            return
         message = update.get("message") or {}
         text = (message.get("text") or "").strip().lower()
         chat = (message.get("chat") or {}).get("id")
@@ -1238,29 +1309,24 @@ def poll():
             log(f"chat captured: {chat}")
             greet()
             show_menu()
-        elif state().get("awaiting") == "minutes" and text.strip().rstrip("m").isdigit():
+        elif state().get("awaiting") == "minutes" and re.fullmatch(r"[0-9]{1,5}m?", text.strip()):
             st2 = state()
             saved2 = st2.get("prefs") or {}
-            saved2["min_seconds"] = max(0, int(text.strip().rstrip("m")) * 60)
+            saved2["min_seconds"] = int(text.strip().rstrip("m")) * 60
             st2["prefs"] = saved2
             st2["view"] = "time"
             st2.pop("awaiting", None)
             save_state(st2)
             show_menu(st2.get("menu_id"))
+        elif state().get("awaiting") == "minutes" and text and not text.startswith("/"):
+            st2 = state()
+            st2.pop("awaiting", None)     # not a number, stop waiting for one
+            save_state(st2)
         elif text in ("/settings", "/start", "settings", "/spend", "spend"):
             st2 = state()
             st2["view"] = "spend" if text.lstrip("/") == "spend" else "home"
             save_state(st2)
             show_menu()
-    st = state()
-    for data in st.pop("queued", []) or []:
-        apply_choice(data)
-        touched = True
-    st = dict(state(), queued=[])
-    st["offset"] = seen
-    save_state(st)
-    if touched:
-        show_menu(state().get("menu_id"))
 
 
 def on_stop(data):
@@ -1274,8 +1340,8 @@ def on_stop(data):
     elapsed = 0
     if since:
         try:
-            start = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+            start = parse_time(since)
+            elapsed = max(0.0, (datetime.now(timezone.utc) - start).total_seconds())
         except (ValueError, AttributeError, TypeError):
             pass
 
@@ -1392,8 +1458,11 @@ def limit_alerts(lim):
     marks = {}
     for key, label, reset_key in (("sessionUsage", t("window_5h"), "sessionResetAt"),
                                   ("weeklyUsage", t("window_week"), "weeklyResetAt")):
-        pct = lim.get(key)
-        if pct is None or pct < 100:
+        try:
+            pct = float(lim.get(key))
+        except (TypeError, ValueError):
+            continue
+        if pct < 100:
             continue
         reset = lim.get(reset_key) or ""
         if fired.get(key, {}).get("reset") == reset:
@@ -1424,6 +1493,7 @@ def limit_alerts(lim):
 
 
 POLL_LOCK = os.path.join(DATA, "poll.lock")
+POLL_MUTEX = os.path.join(DATA, "poll.mutex")
 
 
 def take_poll_lock(tag):

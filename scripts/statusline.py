@@ -25,17 +25,19 @@ INNER = (os.environ.get("CLAUDE_PLUGIN_OPTION_STATUSLINE_COMMAND", "").strip()
 
 
 def store(payload):
-    limits = payload.get("rate_limits")
+    limits = payload.get("rate_limits") if isinstance(payload, dict) else None
     if not isinstance(limits, dict):
         return
     keep = {"captured_at": time.time()}
     for window in ("five_hour", "seven_day"):
         block = limits.get(window)
         if isinstance(block, dict):
-            keep[window] = {
-                "used_percentage": block.get("used_percentage"),
-                "resets_at": block.get("resets_at"),
-            }
+            try:
+                pct = float(block.get("used_percentage"))
+                pct = max(0.0, min(100.0, pct))
+            except (TypeError, ValueError):
+                pct = None
+            keep[window] = {"used_percentage": pct, "resets_at": block.get("resets_at")}
     if len(keep) == 1:
         return
     os.makedirs(DATA, mode=0o700, exist_ok=True)
