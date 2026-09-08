@@ -73,7 +73,7 @@ the tab names Claude Code already wrote there, and prices every one of them.
 ## Install
 
 ```
-/plugin marketplace add Drasezv/cctab
+/plugin marketplace add drasezv/cctab
 /plugin install cctab
 ```
 

@@ -13,7 +13,7 @@
       "author": {
         "name": "Lunace"
       },
-      "homepage": "https://github.com/Drasezv/cctab",
+      "homepage": "https://github.com/drasezv/cctab",
       "license": "MIT",
       "keywords": ["telegram", "notifications", "cost", "rate-limit", "permissions", "approvals", "hooks", "claude-code"]
     }
