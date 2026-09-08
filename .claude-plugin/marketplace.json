@@ -2,7 +2,7 @@
   "name": "cctab",
   "description": "Telegram notifications for Claude Code that carry the bill",
   "owner": {
-    "name": "Lunace"
+    "name": "Drasezv"
   },
   "plugins": [
     {
@@ -11,7 +11,7 @@
       "description": "Telegram push when a long Claude Code task finishes, carrying what it cost and how much of your rate limit it burned. Approve permission prompts with two buttons. Tune it from your phone.",
       "version": "0.1.0",
       "author": {
-        "name": "Lunace"
+        "name": "Drasezv"
       },
       "homepage": "https://github.com/drasezv/cctab",
       "license": "MIT",
