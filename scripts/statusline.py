@@ -17,8 +17,8 @@ CACHE = os.path.join(DATA, "limits.json")
 
 
 def saved_config():
-    """Claude Code does not pass plugin options to the statusline slot — only
-       hooks get those — so anything we need has to be read from disk."""
+    """Claude Code does not pass plugin options to the statusline slot - only
+       hooks get those - so anything we need has to be read from disk."""
     try:
         with open(os.path.join(DATA, "config.json")) as f:
             return json.load(f)

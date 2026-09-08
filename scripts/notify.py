@@ -152,7 +152,7 @@ TELEGRAM_MAX = 4000      # the hard limit is 4096; leave room for the ellipsis
 
 def clamp(text):
     """Telegram rejects anything past 4096 characters outright, and a rejected
-       message is a message the person never sees — which is the one failure
+       message is a message the person never sees - which is the one failure
        this plugin exists to prevent."""
     text = str(text)
     return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX] + "…"
@@ -208,7 +208,7 @@ def state():
 
 
 def save_state(s):
-    """Two Claude Code tabs write this file at the same time — the plugin is
+    """Two Claude Code tabs write this file at the same time - the plugin is
        named after tabs, so that is the normal case. A shared temp name meant
        one process moved the other's file out from under it; a per-process name
        and a lock around the swap keep both alive."""
@@ -314,8 +314,8 @@ UNPRICED = set()
 
 def price_for(model_id):
     """Longest matching id wins, so claude-sonnet-5 is never priced as 4.6.
-       Bedrock and Vertex dress the same model as `us.anthropic.claude-…-v1:0`
-       or `claude-…@20250929`; strip that before matching or the whole family
+       Bedrock and Vertex dress the same model as `us.anthropic.claude-...-v1:0`
+       or `claude-...@20250929`; strip that before matching or the whole family
        falls through to the fallback rate."""
     name = (model_id or "").strip()
     for prefix in ("us.anthropic.", "eu.anthropic.", "apac.anthropic.",
@@ -399,8 +399,8 @@ def error_text(rows):
 
 
 def tally(rows, since):
-    """Sums for the turn, priced as we go. One turn can mix models — a Haiku
-       label after an Opus run — and pricing the total at whichever model spoke
+    """Sums for the turn, priced as we go. One turn can mix models - a Haiku
+       label after an Opus run - and pricing the total at whichever model spoke
        last understates the bill fivefold."""
     res = {"turn": {}, "model": "", "error": False, "turn_cost": 0.0}
     seen = set()
@@ -595,7 +595,7 @@ def title_for(text, session_id):
     if NAME_TASKS and os.path.exists(CLAUDE_BIN):
         # The prompt carries text from the transcript, which may itself have
         # come off a web page or a file, so the child gets no tools to be
-        # talked into using — and none of our settings, which include the bot
+        # talked into using - and none of our settings, which include the bot
         # token, to leak into whatever it spawns.
         child = {k: v for k, v in os.environ.items()
                  if not k.startswith("CLAUDE_PLUGIN_OPTION_")}
@@ -900,7 +900,7 @@ def t(key, **kw):
 PROJECTS_ROOT = os.path.join(HOME, ".claude", "projects")
 SPEND_CACHE = os.path.join(DATA, "spend.json")
 SPEND_TTL = 300
-SPEND_ROWS = 8
+SPEND_ROWS = 6
 
 
 def money(amount):
@@ -1171,7 +1171,7 @@ def api(method, payload):
 
 def greet():
     """Said once, when the bot and the person first meet. It answers the thing
-       they are actually worried about — being pestered — before listing
+       they are actually worried about - being pestered - before listing
        anything the plugin can do."""
     send("\n".join([
         f"<b>{t('connected')}</b>",
@@ -1377,7 +1377,7 @@ def on_stop(data):
     name = tab_name(path) or title_for(ctx, data.get("session_id"))
     # a failure ends on an error, not on an answer: show the error instead
     # an untrimmed stack trace runs past Telegram's 4096 characters and the
-    # whole message fails to send — the person never learns the task died
+    # whole message fails to send - the person never learns the task died
     last = summary(error_text(rows) if tal["error"] else "") \
         or summary(data.get("last_assistant_message") or "")
 
@@ -1547,8 +1547,8 @@ def drop_poll_lock():
 
 def from_owner(tap):
     """A tap is only ours if it came from the chat we write to. Without this
-       anyone who reaches the bot — a group member, or whoever pressed Start
-       first — could approve a command on this machine."""
+       anyone who reaches the bot - a group member, or whoever pressed Start
+       first - could approve a command on this machine."""
     owner = str(chat_id() or "")
     if not owner:
         return False
@@ -1560,7 +1560,7 @@ def from_owner(tap):
 def verdict(behavior, message=""):
     """`decision` is an object, not a string. Claude Code reads
        `hookSpecificOutput.decision.behavior`, so a bare "allow" carries no
-       decision at all and the ask quietly falls through to the terminal —
+       decision at all and the ask quietly falls through to the terminal -
        which is exactly what it did until this was found.
 
        Saying nothing is how a hook declines to decide: an absent `decision`
@@ -1711,7 +1711,7 @@ def detach(payload):
 def main():
     try:
         run()
-    except Exception as err:
+    except Exception:
         # The child runs with stderr closed, so an unhandled error used to
         # vanish completely: notifications simply stopped and there was
         # nothing anywhere to explain why.

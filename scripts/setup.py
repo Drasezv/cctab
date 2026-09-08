@@ -102,13 +102,22 @@ def remember(token):
 
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
-WRAPPER = "~/.claude/plugins/cctab/scripts/statusline.py"
+# The plugin lives wherever the marketplace put it, under a version folder that
+# changes on every update, so the wrapper's path is taken from this file's own.
+WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
+
+
+def saved_statusline():
+    try:
+        return json.load(open(os.path.join(DATA, "config.json"))).get("statusline_command", "")
+    except Exception:
+        return ""
 
 
 def wire_statusline(wrapper_path):
     """Rate limits reach the statusline slot and nowhere else, so cctab has to
        stand in it. Whatever statusline was there keeps running, unchanged,
-       right after ours — it is remembered in our own config because Claude
+       right after ours - it is remembered in our own config because Claude
        Code passes plugin options to hooks only, never to a statusline."""
     try:
         with open(SETTINGS) as f:
@@ -118,10 +127,15 @@ def wire_statusline(wrapper_path):
     except Exception as err:
         return f"settings.json is unreadable ({err}), left alone"
 
+    if not os.path.exists(os.path.expanduser(wrapper_path)):
+        return f"no such file: {wrapper_path}. Nothing was changed."
     current = cfg.get("statusLine") or {}
     existing = (current.get("command") or "").strip()
     if wrapper_path in existing:
         return "already in place"
+    if "statusline.py" in existing and "cctab" in existing:
+        # a wrapper from an older install: swap it, do not chain into it
+        existing = saved_statusline() or ""
 
     path = os.path.join(DATA, "config.json")
     try:
@@ -193,7 +207,7 @@ def main():
     print("Token saved, so this already works. To keep it in your system keychain")
     print("instead of a file, paste it into the plugin's bot_token setting.\n")
     print("One more thing, for the rate-limit numbers:")
-    print("  setup.py --statusline ~/.claude/plugins/cctab/scripts/statusline.py")
+    print("  setup.py --statusline")
     print("It puts cctab in the statusline slot — the only place Claude Code")
     print("hands limits to — and keeps your own statusline running after it.")
 

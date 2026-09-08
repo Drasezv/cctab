@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for cctab. No network, no Telegram, no plugin runtime: the module is
-   loaded straight from disk and its two doors to the outside world — `send`
-   and `api` — are replaced with recorders.
+   loaded straight from disk and its two doors to the outside world - `send`
+   and `api` - are replaced with recorders.
 
    Run: python3 tests/test_cctab.py
 """
@@ -211,7 +211,7 @@ class Menu(Base):
 
     def test_approve_turns_on_in_one_tap(self):
         """`approve` is the one event that starts off, so its first tap must
-           flip what the button shows — not the generic default of on."""
+           flip what the button shows - not the generic default of on."""
         self.m.apply_choice("e:approve")
         self.assertTrue(self.state["prefs"]["events"]["approve"],
                         "первый тап обязан включить, а не оставить как было")
@@ -262,7 +262,7 @@ class Limits(Base):
         self.assertEqual(len(self.sent), 2)
 
     def test_a_failed_send_keeps_the_warning(self):
-        """A window counts as announced only once Telegram takes the message —
+        """A window counts as announced only once Telegram takes the message -
            an unpaired chat must not eat the one warning of the window."""
         soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         lim = {"sessionUsage": 100, "weeklyUsage": 10,
@@ -378,7 +378,7 @@ class Spend(Base):
 
 class BrokenInput(Base):
     def test_unreadable_state_is_moved_aside(self):
-        """A half-written file must not read as "offset 0" — Telegram would
+        """A half-written file must not read as "offset 0" - Telegram would
            replay the whole backlog, yesterday's approval taps included."""
         fresh = load()
         fresh.STATE_FILE = os.path.join(self.tmp, "bad.json")
@@ -456,7 +456,7 @@ class Security(Base):
 class EndToEnd(unittest.TestCase):
     """The earlier classes stub `state` and `send`, which means a broken
        `on_stop`, `poll` or `send` slipped through green. These drive the hook
-       the way Claude Code does — real stdin, real state file on disk — and
+       the way Claude Code does - real stdin, real state file on disk - and
        replace only the network."""
 
     def setUp(self):
@@ -486,7 +486,7 @@ class EndToEnd(unittest.TestCase):
 
         def fake_urlopen(url, **kw):
             """`send` posts through urllib directly, so the recorder has to sit
-               here rather than on `api` — that gap is why a dead `send` used
+               here rather than on `api` - that gap is why a dead `send` used
                to pass the suite."""
             target = getattr(url, "full_url", url)
             if hasattr(url, "data") and url.data:
