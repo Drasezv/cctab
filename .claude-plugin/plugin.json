@@ -1,0 +1,52 @@
+{
+  "name": "cctab",
+  "version": "0.1.0",
+  "description": "Telegram push when a long Claude Code task finishes, carrying what it cost and how much of your rate limit it burned. Approve permission prompts with two buttons. Tune it from your phone.",
+  "author": {
+    "name": "Lunace"
+  },
+  "homepage": "https://github.com/PLACEHOLDER/cctab",
+  "keywords": [
+    "telegram",
+    "notifications",
+    "cost",
+    "rate-limit",
+    "permissions",
+    "approvals",
+    "hooks",
+    "claude-code"
+  ],
+  "userConfig": {
+    "bot_token": {
+      "type": "string",
+      "title": "Telegram bot token",
+      "description": "Talk to @BotFather, send /newbot, paste the token it gives you.",
+      "sensitive": true
+    },
+    "chat_id": {
+      "type": "string",
+      "title": "Telegram chat ID (optional)",
+      "description": "Leave empty. Send your bot any message and cctab picks this up by itself."
+    },
+    "min_seconds": {
+      "type": "string",
+      "title": "Starting quiet threshold, in seconds",
+      "description": "Shorter tasks send nothing. This is only the starting value: send /settings to your bot and change it with buttons from your phone. Default 1800."
+    },
+    "statusline_command": {
+      "type": "string",
+      "title": "Your existing statusline command (optional)",
+      "description": "Rate limits reach the statusline slot only, never hooks. Put your current statusline command here and cctab runs it untouched after reading the numbers."
+    },
+    "use_usage_api": {
+      "type": "string",
+      "title": "Fall back to the usage endpoint (off by default)",
+      "description": "Set to true only if you skip the statusline wrapper. It reads your local OAuth token and calls an undocumented Anthropic endpoint. Cost still works with this off."
+    },
+    "name_tasks": {
+      "type": "string",
+      "title": "Label each task using Haiku (off by default)",
+      "description": "Set to true to have a short task name in every push. Costs one small Haiku call per session, billed to you."
+    }
+  }
+}

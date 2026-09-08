@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "Stop": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/notify.py", "timeout": 90 }
+      ]}
+    ],
+    "Notification": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/notify.py", "timeout": 90 }
+      ]}
+    ],
+    "PermissionRequest": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/notify.py", "timeout": 150 }
+      ]}
+    ]
+  }
+}
