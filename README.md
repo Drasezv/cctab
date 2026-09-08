@@ -95,18 +95,22 @@ And a warning while there is still time to do something about it:
 Claude Code hands rate limits to the statusline command and nowhere else, so a
 hook cannot see them. cctab takes them in this order:
 
-1. **A statusline wrapper.** Official numbers, no network, no tokens. It reads
-   the limits and passes the payload straight through to whatever statusline you
-   already run, so nothing you have set up breaks. Point `statusline_command` at
-   your existing command and add this to `settings.json`:
+1. **A statusline wrapper.** Official numbers, no network, no tokens. One
+   command puts it in place:
 
-   ```json
-   "statusLine": { "type": "command", "command": "~/.claude/plugins/cctab/scripts/statusline.py" }
    ```
+   scripts/setup.py --statusline ~/.claude/plugins/cctab/scripts/statusline.py
+   ```
+
+   It takes the statusline slot, remembers whatever statusline you already ran,
+   and hands the payload straight on to it — nothing you set up breaks.
 
 2. **The usage endpoint**, off unless you turn on `use_usage_api`. It reads your
    local OAuth token and calls an endpoint Anthropic has not documented. It is
    opt-in on purpose.
+
+   Turn it on if you work in the VS Code extension: there is no statusline
+   there, so Claude Code never runs the wrapper and the first path is dead.
 
 3. **Nothing.** The message still carries what the task cost.
 

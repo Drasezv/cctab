@@ -6,6 +6,7 @@ username nobody has taken. So we hand one over, already free.
 """
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.parse
@@ -43,6 +44,22 @@ def qr(text):
                     (False, True): "▀", (False, False): "█"}[(top, bottom)]
         lines.append(row)
     return "\n".join(lines)
+
+
+TOKEN_SHAPE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
+
+
+def looks_like_a_token(token):
+    """Say what is wrong in words. A token pasted with a stray space or half of
+       it missing otherwise comes back as a unicode codec error from deep
+       inside urllib, which tells the person nothing."""
+    if ":" not in token:
+        return "that has no colon in it — copy the whole line BotFather sent"
+    if any(ch.isspace() for ch in token):
+        return "there is a space in there — copy it again without breaks"
+    if not TOKEN_SHAPE.match(token):
+        return "that is not the shape of a token (digits, a colon, then letters)"
+    return ""
 
 
 def whoami(token):
@@ -147,8 +164,15 @@ def main():
         print("  setup.py <token>")
         return
 
+    problem = looks_like_a_token(token)
+    if problem:
+        print(f"That token will not do: {problem}")
+        return
+
     username, problem = whoami(token)
     if problem:
+        if "401" in problem:
+            problem = "Telegram does not know it — check you pasted the newest one"
         print(f"Telegram would not take that token: {problem}")
         return
     hooked = webhook_blocks_us(token)

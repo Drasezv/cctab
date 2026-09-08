@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 
+os.umask(0o077)          # limits and config are nobody else's business
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
 CACHE = os.path.join(DATA, "limits.json")
 
@@ -43,7 +44,7 @@ def store(payload):
             }
     if len(keep) == 1:
         return
-    os.makedirs(DATA, exist_ok=True)
+    os.makedirs(DATA, mode=0o700, exist_ok=True)
     tmp = CACHE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(keep, f)
