@@ -12,6 +12,8 @@ import sys
 import urllib.parse
 import urllib.request
 
+os.umask(0o077)          # what we write is nobody else's business
+
 TELEGRAM_API = "https://api.telegram.org/bot"
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
 
@@ -85,7 +87,7 @@ def webhook_blocks_us(token):
 
 def remember(token):
     """Keep the token so the plugin works before anyone edits settings."""
-    os.makedirs(DATA, exist_ok=True)
+    os.makedirs(DATA, mode=0o700, exist_ok=True)
     path = os.path.join(DATA, "config.json")
     try:
         saved = json.load(open(path))

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -23,7 +24,12 @@ STATE_FILE = os.path.join(DATA, "state.json")
 STATE_LOCK = os.path.join(DATA, "state.lock")
 LOG_FILE = os.path.join(DATA, "cctab.log")
 LIMITS_CACHE = os.path.join(DATA, "limits.json")
-CLAUDE_BIN = os.path.join(HOME, ".local/bin/claude")
+# wherever the installer chose to put it: PATH first, then the usual homes
+CLAUDE_BIN = shutil.which("claude") or next(
+    (p for p in (os.path.join(HOME, ".local/bin/claude"),
+                 os.path.join(HOME, ".claude/local/claude"),
+                 "/opt/homebrew/bin/claude",
+                 "/usr/local/bin/claude") if os.path.exists(p)), "")
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 
@@ -153,10 +159,11 @@ def clamp(text):
 
 
 def send(text):
+    """True only once Telegram takes the message, so a caller may retry later."""
     text = clamp(text)
     token, chat = BOT_TOKEN, chat_id()
     if not token or not chat:
-        return
+        return False
     body = urllib.parse.urlencode({
         "chat_id": chat,
         "text": text,
@@ -167,9 +174,11 @@ def send(text):
     try:
         answer = json.loads(urllib.request.urlopen(req, timeout=10).read())
         log(f"sent, id={answer.get('result', {}).get('message_id')}")
+        return True
     except Exception as err:
         detail = err.read().decode()[:300] if hasattr(err, "read") else str(err)
         log(f"send failed: {detail}")
+        return False
 
 
 def log(line):
@@ -1237,7 +1246,9 @@ def apply_choice(data):
         if key not in {k for k, _, _ in EVENTS}:
             return ""
         events = saved.get("events") or {}
-        events[key] = not events.get(key, True)
+        # flip from what the button shows, and `approve` starts off: against a
+        # plain default of True its first tap stored False and changed nothing
+        events[key] = not events.get(key, EVENT_DEFAULTS.get(key, True))
         saved["events"] = events
         st["prefs"] = saved
         save_state(st)
@@ -1349,10 +1360,7 @@ def on_stop(data):
     # come first and unconditionally.
     lim = limits()
     if wants("limits"):
-        # ask only when we would actually speak: limit_alerts marks a window as
-        # announced, so calling it while muted eats the one warning it had
-        for alert in limit_alerts(lim):
-            send(alert)
+        limit_alerts(lim)
 
     threshold = prefs()["min_seconds"]
     if tal["error"]:
@@ -1411,8 +1419,6 @@ def on_notification(data):
     now = time.time()
     if now - st.get("last_notify", 0) < NOTIFY_COOLDOWN:
         return
-    st["last_notify"] = now
-    save_state(st)
 
     path = data.get("transcript_path", "")
     rows = parse(path)
@@ -1454,6 +1460,11 @@ def on_notification(data):
         head = f"🟠 <b>{t('waiting')}</b>"
         body = f"{t('stopped_alone')}\n\n<b>{t('go_terminal')}</b>"
 
+    # the cooldown starts only once something is actually said: a muted kind
+    # must not stand in the way of the next one that is not
+    st["last_notify"] = now
+    save_state(st)
+
     name = tab_name(path) or title_for(ctx, data.get("session_id"))
     send("\n".join([head, f"<i>{esc(name)}</i>", "", body]))
 
@@ -1462,10 +1473,13 @@ def limit_alerts(lim):
     """One message, and only once a window is actually spent. Warning at 80 and
        again at 95 filled the chat with things nobody could act on; being out is
        the only moment that changes what the person does next. Both bars ride
-       along, because the answer to "what now" is whether the other one holds."""
+       along, because the answer to "what now" is whether the other one holds.
+       A window counts as announced only after Telegram takes the message: an
+       unpaired chat or a dead network must not eat the one warning there is."""
     st = state()
     fired = st.get("limit_alerts", {})
     spent = []
+    marks = {}
     for key, label, reset_key in (("sessionUsage", t("window_5h"), "sessionResetAt"),
                                   ("weeklyUsage", t("window_week"), "weeklyResetAt")):
         pct = lim.get(key)
@@ -1474,12 +1488,10 @@ def limit_alerts(lim):
         reset = lim.get(reset_key) or ""
         if fired.get(key, {}).get("reset") == reset:
             continue                      # already said so for this window
-        fired[key] = {"reset": reset}
+        marks[key] = {"reset": reset}
         spent.append((label, reset))
-    st["limit_alerts"] = fired
-    save_state(st)
     if not spent:
-        return []
+        return
 
     label, reset = spent[0]
     rows = [f"🔴 <b>{t('limit_reached')}</b>", f"<i>{label}</i>", ""]
@@ -1492,7 +1504,13 @@ def limit_alerts(lim):
                     f"{t('resets_in')} {left(lim.get('weeklyResetAt'))}")
     rows.append("")
     rows.append(f"<i>{t('nothing_until')} {left(reset)}.</i>")
-    return ["\n".join(rows)]
+    if not send("\n".join(rows)):
+        return
+    st = state()                          # send may have just captured the chat
+    fired = st.get("limit_alerts", {})
+    fired.update(marks)
+    st["limit_alerts"] = fired
+    save_state(st)
 
 
 POLL_LOCK = os.path.join(DATA, "poll.lock")

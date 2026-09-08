@@ -45,7 +45,7 @@ class Base(unittest.TestCase):
         self.m.state = lambda: self.state
         self.m.save_state = lambda s: self.state.update(s)
         self.sent = []
-        self.m.send = self.sent.append
+        self.m.send = lambda text: self.sent.append(text) or True
         self.calls = []
         self.m.api = lambda method, payload: (
             self.calls.append((method, payload)) or {"result": {"message_id": 1}})
@@ -209,6 +209,13 @@ class Menu(Base):
         self.m.apply_choice("e:done")
         self.assertTrue(self.state["prefs"]["events"]["done"])
 
+    def test_approve_turns_on_in_one_tap(self):
+        """`approve` is the one event that starts off, so its first tap must
+           flip what the button shows — not the generic default of on."""
+        self.m.apply_choice("e:approve")
+        self.assertTrue(self.state["prefs"]["events"]["approve"],
+                        "первый тап обязан включить, а не оставить как было")
+
     def test_language_switch(self):
         self.m.apply_choice("l:ru")
         self.assertEqual(self.state["lang"], "ru")
@@ -230,28 +237,55 @@ class Escaping(Base):
 class Limits(Base):
     def test_only_fires_when_spent(self):
         soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
-        self.assertEqual(self.m.limit_alerts(
-            {"sessionUsage": 95, "weeklyUsage": 10,
-             "sessionResetAt": soon, "weeklyResetAt": soon}), [])
-        self.assertEqual(len(self.m.limit_alerts(
-            {"sessionUsage": 100, "weeklyUsage": 10,
-             "sessionResetAt": soon, "weeklyResetAt": soon})), 1)
+        self.m.limit_alerts({"sessionUsage": 95, "weeklyUsage": 10,
+                             "sessionResetAt": soon, "weeklyResetAt": soon})
+        self.assertEqual(self.sent, [])
+        self.m.limit_alerts({"sessionUsage": 100, "weeklyUsage": 10,
+                             "sessionResetAt": soon, "weeklyResetAt": soon})
+        self.assertEqual(len(self.sent), 1)
 
     def test_said_once_per_window(self):
         soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         lim = {"sessionUsage": 100, "weeklyUsage": 10,
                "sessionResetAt": soon, "weeklyResetAt": soon}
         self.m.limit_alerts(lim)
-        self.assertEqual(self.m.limit_alerts(lim), [], "второй раз слать нельзя")
+        self.m.limit_alerts(lim)
+        self.assertEqual(len(self.sent), 1, "второй раз слать нельзя")
 
     def test_a_new_window_speaks_again(self):
         first = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         later = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
         self.m.limit_alerts({"sessionUsage": 100, "weeklyUsage": 10,
                              "sessionResetAt": first, "weeklyResetAt": first})
-        self.assertEqual(len(self.m.limit_alerts(
-            {"sessionUsage": 100, "weeklyUsage": 10,
-             "sessionResetAt": later, "weeklyResetAt": later})), 1)
+        self.m.limit_alerts({"sessionUsage": 100, "weeklyUsage": 10,
+                             "sessionResetAt": later, "weeklyResetAt": later})
+        self.assertEqual(len(self.sent), 2)
+
+    def test_a_failed_send_keeps_the_warning(self):
+        """A window counts as announced only once Telegram takes the message —
+           an unpaired chat must not eat the one warning of the window."""
+        soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+        lim = {"sessionUsage": 100, "weeklyUsage": 10,
+               "sessionResetAt": soon, "weeklyResetAt": soon}
+        self.m.send = lambda text: False          # чат ещё не привязан
+        self.m.limit_alerts(lim)
+        self.m.send = lambda text: self.sent.append(text) or True
+        self.m.limit_alerts(lim)
+        self.assertEqual(len(self.sent), 1,
+                         "после провала отправки предупреждение обязано повториться")
+
+
+class Cooldown(Base):
+    def test_a_muted_kind_does_not_eat_the_cooldown(self):
+        """A muted permission ping must not block the next real notification
+           for the following sixty seconds."""
+        open(self.m.POLL_LOCK, "w").close()       # poll стоит в стороне
+        self.state["prefs"] = {"events": {"permission": False}}
+        self.m.on_notification({"transcript_path": "", "session_id": "s",
+                                "message": "Claude needs your permission"})
+        self.assertEqual(self.sent, [])
+        self.assertFalse(self.state.get("last_notify"),
+                         "заглушённое событие не должно заводить кулдаун")
 
 
 class Approvals(Base):
