@@ -47,6 +47,7 @@ def store(payload):
     os.replace(tmp, CACHE)
 
 
+# без этого пользователь потеряет свой statusline
 def chain(raw):
     """pass payload to the previous statusline"""
     if not INNER:

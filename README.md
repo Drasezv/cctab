@@ -36,11 +36,11 @@ Python.
 | Approve from the phone | two buttons | reply with a code |
 | Needs | a hook | Bun, MCP server, `--channels` |
 
-Cost is the awkward part. Claude Code does not pass it to hooks
-([#11008](https://github.com/anthropics/claude-code/issues/11008)), so it comes
-out of the session transcripts, per request, per model.
+Hooks do not get the cost from Claude Code
+([#11008](https://github.com/anthropics/claude-code/issues/11008)), so I parse
+the session transcripts and price each request by its model.
 
-## Quiet by default
+## Settings, from the phone
 
 Nothing until a task has run for thirty minutes. Failures always come through.
 
@@ -71,7 +71,7 @@ the plugin's `bot_token` setting to move it into the keychain.
 
 Hooks are read at startup, so restart Claude Code once after installing.
 
-## Messages
+## The rest of the messages
 
 <img src="docs/greeting.png" alt="The first message" width="440">
 
@@ -108,7 +108,7 @@ order:
 
 3. **Nothing.** Cost still works; it comes from the transcript either way.
 
-## Settings
+Plugin settings, for the things you set once:
 
 | Option | Default | |
 |---|---|---|
@@ -157,11 +157,7 @@ Delete `~/.cctab`, it holds the token. If you wired the statusline, put your old
 command back in `~/.claude/settings.json`; it is saved as `statusline_command`
 in `~/.cctab/config.json`.
 
-## Requirements
-
 Python 3.8+, nothing else. Tested on 3.9 and 3.10. Approvals need a Claude Code
 with the `PermissionRequest` hook.
-
-## License
 
 MIT. [Drasezv](https://github.com/drasezv)

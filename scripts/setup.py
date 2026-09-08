@@ -14,6 +14,7 @@ TELEGRAM_API = "https://api.telegram.org/bot"
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
 
 
+# имя занято почти всегда, поэтому генерим с хвостом
 def suggest():
     return f"cctab_{secrets.token_hex(3)}_bot"
 

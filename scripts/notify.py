@@ -312,6 +312,7 @@ def model_name(model_id):
 UNPRICED = set()
 
 
+# цены сверять с docs.claude.com/en/docs/about-claude/pricing
 def price_for(model_id):
     """longest id prefix wins, bedrock/vertex prefixes stripped"""
     name = (model_id or "").strip()
@@ -606,6 +607,7 @@ def title_for(text, session_id):
     return title
 
 
+# дорогая: читает все транскрипты за окно. вызывать только когда точно шлём
 def window_cost(reset_iso, hours):
     """cost of everything in the current window"""
     try:
@@ -1217,6 +1219,7 @@ def poll():
     """getUpdates: pairing, taps, commands"""
     if not BOT_TOKEN:
         return
+    # лок от ожидающего подтверждения: пока он висит, сюда не лезем
     if os.path.exists(POLL_LOCK):
         try:
             if time.time() - os.path.getmtime(POLL_LOCK) < APPROVE_WAIT * 2:
