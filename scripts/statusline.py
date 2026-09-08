@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
-"""Statusline wrapper.
-
-Claude Code hands rate limits to the statusline command and nowhere else,
-hooks never see them. So we sit in that slot, keep a copy of the numbers, and
-hand the payload on to whatever statusline the user already had.
-"""
+"""statusline wrapper: saves rate limits, chains to the old statusline"""
 import json
 import os
 import subprocess
 import sys
 import time
 
-os.umask(0o077)          # limits and config are nobody else's business
+os.umask(0o077)
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
 CACHE = os.path.join(DATA, "limits.json")
 
 
 def saved_config():
-    """Claude Code does not pass plugin options to the statusline slot - only
-       hooks get those - so anything we need has to be read from disk."""
+    """statusline gets no plugin env, read config.json"""
     try:
         with open(os.path.join(DATA, "config.json")) as f:
             return json.load(f)
@@ -52,7 +46,7 @@ def store(payload):
 
 
 def chain(raw):
-    """Hand the untouched payload to the statusline the user configured before us."""
+    """pass payload to the previous statusline"""
     if not INNER:
         return
     try:

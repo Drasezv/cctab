@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Walks a new user from nothing to a working bot.
-
-The slow part of BotFather has never been the commands, it is inventing a
-username nobody has taken. So we hand one over, already free.
-"""
+"""setup: bot name, token check, statusline wiring"""
 import json
 import os
 import re
@@ -12,7 +8,7 @@ import sys
 import urllib.parse
 import urllib.request
 
-os.umask(0o077)          # what we write is nobody else's business
+os.umask(0o077)
 
 TELEGRAM_API = "https://api.telegram.org/bot"
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
@@ -23,11 +19,6 @@ def suggest():
 
 
 def qr(text):
-    """A QR block, but only if the user happens to have the library.
-
-    The link alone is one click on a desktop, so this stays a bonus and never
-    a dependency.
-    """
     try:
         import qrcode
     except ImportError:
@@ -52,9 +43,7 @@ TOKEN_SHAPE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
 
 
 def looks_like_a_token(token):
-    """Say what is wrong in words. A token pasted with a stray space or half of
-       it missing otherwise comes back as a unicode codec error from deep
-       inside urllib, which tells the person nothing."""
+    """cheap sanity check before hitting telegram"""
     if ":" not in token:
         return "that has no colon in it — copy the whole line BotFather sent"
     if any(ch.isspace() for ch in token):
@@ -76,7 +65,7 @@ def whoami(token):
 
 
 def webhook_blocks_us(token):
-    """getUpdates goes silent when a webhook is set, and says nothing about it."""
+    """a webhook would eat getUpdates"""
     try:
         body = json.loads(urllib.request.urlopen(
             f"{TELEGRAM_API}{token}/getWebhookInfo", timeout=10).read())
@@ -86,7 +75,7 @@ def webhook_blocks_us(token):
 
 
 def remember(token):
-    """Keep the token so the plugin works before anyone edits settings."""
+    """save token to config.json"""
     os.makedirs(DATA, mode=0o700, exist_ok=True)
     path = os.path.join(DATA, "config.json")
     try:
@@ -102,8 +91,7 @@ def remember(token):
 
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
-# The plugin lives wherever the marketplace put it, under a version folder that
-# changes on every update, so the wrapper's path is taken from this file's own.
+# path changes with every plugin version, so take it from __file__
 WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
 
 
@@ -115,10 +103,7 @@ def saved_statusline():
 
 
 def wire_statusline(wrapper_path):
-    """Rate limits reach the statusline slot and nowhere else, so cctab has to
-       stand in it. Whatever statusline was there keeps running, unchanged,
-       right after ours - it is remembered in our own config because Claude
-       Code passes plugin options to hooks only, never to a statusline."""
+    """put our wrapper in statusLine, remember the old one"""
     try:
         with open(SETTINGS) as f:
             cfg = json.load(f)

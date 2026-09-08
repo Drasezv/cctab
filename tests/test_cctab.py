@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for cctab. No network, no Telegram, no plugin runtime: the module is
-   loaded straight from disk and its two doors to the outside world - `send`
-   and `api` - are replaced with recorders.
-
-   Run: python3 tests/test_cctab.py
-"""
+"""tests: python3 tests/test_cctab.py"""
 import importlib.util
 import io
 import json
@@ -36,8 +31,7 @@ def plain(html):
 
 
 class Base(unittest.TestCase):
-    """Every test gets a fresh module, a fake state and a recorder in place of
-       Telegram, so nothing touches the network or the real config."""
+    """fresh module, fake state, no network"""
 
     def setUp(self):
         self.m = load()
@@ -67,8 +61,7 @@ class Base(unittest.TestCase):
 
 class Money(Base):
     def test_cache_reads_are_cheap(self):
-        """A cache read costs a tenth of an input token, and getting that wrong
-           overstates a long session by an order of magnitude."""
+        """cache read = 0.1 of input price"""
         turn = {"input_tokens": 1_000_000, "output_tokens": 0,
                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
         full = self.m.cost(turn, "claude-opus-5")
@@ -88,8 +81,7 @@ class Money(Base):
         self.assertAlmostEqual(self.m.cost(turn, "claude-something-new"), 5.0, places=6)
 
     def test_sonnet_versions_are_priced_apart(self):
-        """Sonnet 5 is $2/$10 and Sonnet 4.6 is $3/$15. A substring match on
-           "sonnet" billed the newer one at the older one's rate."""
+        """sonnet 5 and 4.6 have different prices"""
         million_in = {"input_tokens": 1_000_000, "output_tokens": 0}
         self.assertAlmostEqual(self.m.cost(million_in, "claude-sonnet-5"), 2.0, places=6)
         self.assertAlmostEqual(self.m.cost(million_in, "claude-sonnet-4-6"), 3.0, places=6)
@@ -105,8 +97,7 @@ class Money(Base):
 
 class Tally(Base):
     def test_usage_counted_once_per_request(self):
-        """Usage repeats in every record of one request; counting rows would
-           bill the same tokens several times over."""
+        """usage repeats per record, count once per requestId"""
         usage = {"input_tokens": 100, "output_tokens": 200,
                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
         rows = [{"type": "assistant", "requestId": "r1", "timestamp": "2026-01-01T00:00:00Z",
@@ -115,7 +106,6 @@ class Tally(Base):
         self.assertEqual(got["turn"]["output_tokens"], 200)
 
     def test_a_mixed_turn_is_priced_per_model(self):
-        """A Haiku call after an Opus run must not reprice the Opus tokens."""
         big = {"input_tokens": 0, "output_tokens": 1_000_000,
                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
         small = {"input_tokens": 0, "output_tokens": 1_000,
@@ -140,8 +130,7 @@ class Tally(Base):
 
 class Naming(Base):
     def test_tab_name_takes_the_last_title(self):
-        """Claude Code rewrites the tab name as the work turns; the last one is
-           the one the person sees in their sidebar."""
+        """last ai-title wins"""
         path = self.transcript([
             {"type": "ai-title", "aiTitle": "первое имя"},
             {"type": "assistant", "message": {}},
@@ -178,8 +167,7 @@ class Language(Base):
         self.assertEqual(self.m.lang(), "en")
 
     def test_no_raw_keys_leak_into_screens(self):
-        """A key that slipped through untranslated looks like `ev_done` on the
-           screen, which is how the last regression was spotted."""
+        """no raw keys like ev_done on screen"""
         stray = re.compile(r"\b(?:ev_|step_|b_|e_|u_)[a-z_0-9]+")
         for code in ("en", "ru"):
             self.state["lang"] = code
@@ -210,8 +198,7 @@ class Menu(Base):
         self.assertTrue(self.state["prefs"]["events"]["done"])
 
     def test_approve_turns_on_in_one_tap(self):
-        """`approve` is the one event that starts off, so its first tap must
-           flip what the button shows - not the generic default of on."""
+        """approve starts off, first tap must turn it on"""
         self.m.apply_choice("e:approve")
         self.assertTrue(self.state["prefs"]["events"]["approve"],
                         "первый тап обязан включить, а не оставить как было")
@@ -227,7 +214,6 @@ class Menu(Base):
 
 class Escaping(Base):
     def test_html_in_a_tab_name_cannot_break_the_message(self):
-        """Names, errors and commands all come from outside and land in HTML."""
         path = self.transcript([{"type": "ai-title", "aiTitle": "<b>evil</b> & co"}])
         name = self.m.tab_name(path)
         self.assertIn("&lt;b&gt;", self.m.esc(name))
@@ -262,8 +248,7 @@ class Limits(Base):
         self.assertEqual(len(self.sent), 2)
 
     def test_a_failed_send_keeps_the_warning(self):
-        """A window counts as announced only once Telegram takes the message -
-           an unpaired chat must not eat the one warning of the window."""
+        """mark sent only after telegram accepted"""
         soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
         lim = {"sessionUsage": 100, "weeklyUsage": 10,
                "sessionResetAt": soon, "weeklyResetAt": soon}
@@ -277,8 +262,7 @@ class Limits(Base):
 
 class Cooldown(Base):
     def test_a_muted_kind_does_not_eat_the_cooldown(self):
-        """A muted permission ping must not block the next real notification
-           for the following sixty seconds."""
+        """muted event must not start the cooldown"""
         open(self.m.POLL_LOCK, "w").close()       # poll стоит в стороне
         self.state["prefs"] = {"events": {"permission": False}}
         self.m.on_notification({"transcript_path": "", "session_id": "s",
@@ -290,8 +274,6 @@ class Cooldown(Base):
 
 class Approvals(Base):
     def test_decision_is_an_object_with_a_behavior(self):
-        """Claude Code reads `decision.behavior`. A bare string carries no
-           decision at all, and the ask falls through to the terminal."""
         self.assertEqual(self.m.verdict("allow"),
                          {"hookSpecificOutput": {"hookEventName": "PermissionRequest",
                                                  "decision": {"behavior": "allow"}}})
@@ -300,7 +282,6 @@ class Approvals(Base):
                          {"behavior": "deny", "message": "no thanks"})
 
     def test_no_answer_leaves_the_flow_alone(self):
-        """Declining to decide means sending no decision, not inventing one."""
         self.assertNotIn("decision", self.m.verdict("")["hookSpecificOutput"])
         self.state["prefs"] = {"events": {"approve": True}}
         self.m.APPROVE_WAIT = 0
@@ -311,8 +292,7 @@ class Approvals(Base):
         self.assertNotIn("decision", got["hookSpecificOutput"])
 
     def test_approvals_are_off_until_asked_for(self):
-        """On by default would mean every permission prompt in every session
-           pauses for a minute while the hook waits on a phone."""
+        """approve is off by default"""
         self.assertFalse(self.m.prefs()["events"]["approve"])
         self.assertTrue(self.m.prefs()["events"]["done"])
 
@@ -378,8 +358,7 @@ class Spend(Base):
 
 class BrokenInput(Base):
     def test_unreadable_state_is_moved_aside(self):
-        """A half-written file must not read as "offset 0" - Telegram would
-           replay the whole backlog, yesterday's approval taps included."""
+        """broken state must not reset offset to 0"""
         fresh = load()
         fresh.STATE_FILE = os.path.join(self.tmp, "bad.json")
         fresh.LOG_FILE = os.path.join(self.tmp, "log")
@@ -404,7 +383,6 @@ class BrokenInput(Base):
 
 
 class Security(Base):
-    """The parts an attacker would go for, pinned down so they stay fixed."""
 
     def tap(self, who, chat, data, message_id=1):
         return {"id": "1", "from": {"id": who}, "data": data,
@@ -454,10 +432,7 @@ class Security(Base):
 
 
 class EndToEnd(unittest.TestCase):
-    """The earlier classes stub `state` and `send`, which means a broken
-       `on_stop`, `poll` or `send` slipped through green. These drive the hook
-       the way Claude Code does - real stdin, real state file on disk - and
-       replace only the network."""
+    """drives the hook via stdin, only the network is faked"""
 
     def setUp(self):
         self.m = load()
@@ -485,9 +460,6 @@ class EndToEnd(unittest.TestCase):
         self.m.window_cost = lambda *a: 0.0
 
         def fake_urlopen(url, **kw):
-            """`send` posts through urllib directly, so the recorder has to sit
-               here rather than on `api` - that gap is why a dead `send` used
-               to pass the suite."""
             target = getattr(url, "full_url", url)
             if hasattr(url, "data") and url.data:
                 fields = urllib.parse.parse_qs(url.data.decode())
@@ -523,7 +495,6 @@ class EndToEnd(unittest.TestCase):
         return path
 
     def fire(self, payload):
-        """Feed the hook on stdin, exactly as Claude Code does."""
         saved_stdin, saved_env = sys.stdin, os.environ.get("CC_TG_BG")
         os.environ["CC_TG_BG"] = "1"          # stay in-process, do not detach
         sys.stdin = io.StringIO(json.dumps(payload))
@@ -549,7 +520,6 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("a real tab", texts[-1])
 
     def test_a_short_task_says_nothing(self):
-        """The whole pitch is silence under the threshold."""
         self.fire({"hook_event_name": "Stop", "session_id": "s",
                    "transcript_path": self.transcript(2),
                    "last_assistant_message": "quick one"})
@@ -605,8 +575,6 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual([t for t in self.sent_texts() if t], [])
 
     def test_a_crash_is_written_down_rather_than_swallowed(self):
-        """The child runs with stderr closed. Before this, an unhandled error
-           meant notifications simply stopped with nothing to explain why."""
         def boom():
             raise RuntimeError("boom")
         self.m.run = boom

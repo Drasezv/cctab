@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Telegram notifications for Claude Code. Stop and Notification hooks."""
+"""cctab: Telegram notifications for Claude Code hooks."""
 import glob
 import hashlib
 import json
@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 if os.environ.get("CC_TG_NOTIFY_CHILD"):
     sys.exit(0)
 
-os.umask(0o077)          # what we write is nobody else's business
+os.umask(0o077)
 HOME = os.path.expanduser("~")
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.join(HOME, ".cctab")
 STATE_FILE = os.path.join(DATA, "state.json")
@@ -42,9 +42,7 @@ def saved_config():
 
 
 def option(name, fallback=""):
-    """Plugin settings first, then our own config. The second path matters for
-       anyone who set the plugin up by hand, and for the statusline slot, which
-       Claude Code never passes plugin options to."""
+    """plugin option, else config.json"""
     live = os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", "").strip()
     if live:
         return live
@@ -75,9 +73,7 @@ ERROR_WINDOW = 8     # how far back a failure may sit and still count
 
 TELEGRAM_API = "https://api.telegram.org/bot"
 
-# Dollars per million tokens, as published by Anthropic. Matched longest id
-# first: "sonnet-5" and "sonnet-4-6" are different prices, and a substring
-# match on "sonnet" would quietly bill one at the other's rate.
+# Dollars per million tokens, as published by Anthropic.
 PRICES = {
     "claude-fable-5-1": (10.0, 50.0),
     "claude-mythos-5-1": (10.0, 50.0),
@@ -102,23 +98,19 @@ PRICES = {
     "claude-3-haiku": (0.25, 1.25),
 }
 
-# Rates for anything not in the table. Guessing high would inflate the bill on
-# an unknown model; guessing low would hide it. These are the mid-tier rates,
-# and an unknown id is worth saying out loud rather than pricing silently.
+# Rates for anything not in the table.
 FALLBACK_PRICE = (5.0, 25.0)
 
 TITLE_PROMPT = (
     "Below is how a working session began. Name the thing being worked on. "
-    "This is a label for a phone notification, so the person can tell one of "
-    "their parallel tasks from another.\n"
+    "It is a label for a phone notification.\n"
     "2-5 words, no quotes, no trailing period, and skip filler words like "
     "'task', 'setup' or 'building'. Reply with the label only.\n\n"
 )
 
 
 def chat_id():
-    """Where to send. Configured value wins; otherwise the first person who
-    wrote to the bot, remembered once so we stop asking Telegram."""
+    """chat id: config, then state, then first message to the bot"""
     if CHAT_ID:
         return CHAT_ID
     st = state()
@@ -143,7 +135,7 @@ def chat_id():
             save_state(st)
             log(f"chat captured: {found}")
             return str(found)
-    log("nobody has messaged the bot yet")
+    log("no messages to the bot yet")
     return ""
 
 
@@ -151,15 +143,13 @@ TELEGRAM_MAX = 4000      # the hard limit is 4096; leave room for the ellipsis
 
 
 def clamp(text):
-    """Telegram rejects anything past 4096 characters outright, and a rejected
-       message is a message the person never sees - which is the one failure
-       this plugin exists to prevent."""
+    """telegram limit is 4096"""
     text = str(text)
     return text if len(text) <= TELEGRAM_MAX else text[:TELEGRAM_MAX] + "…"
 
 
 def send(text):
-    """True only once Telegram takes the message, so a caller may retry later."""
+    """returns True if telegram accepted it"""
     text = clamp(text)
     token, chat = BOT_TOKEN, chat_id()
     if not token or not chat:
@@ -197,8 +187,7 @@ def state():
     except FileNotFoundError:
         return {}
     except Exception:
-        # A half-written file must not read as "offset 0": Telegram would then
-        # replay the whole backlog, including yesterday's approval taps.
+        # offset 0 would replay the whole telegram backlog
         try:
             os.replace(STATE_FILE, STATE_FILE + ".bad")
             log("state file was unreadable, moved aside")
@@ -208,10 +197,7 @@ def state():
 
 
 def save_state(s):
-    """Two Claude Code tabs write this file at the same time - the plugin is
-       named after tabs, so that is the normal case. A shared temp name meant
-       one process moved the other's file out from under it; a per-process name
-       and a lock around the swap keep both alive."""
+    """two tabs may write at once, so tmp per pid + lock"""
     os.makedirs(os.path.dirname(STATE_FILE), mode=0o700, exist_ok=True)
     tmp = f"{STATE_FILE}.{os.getpid()}.tmp"
     try:
@@ -246,9 +232,7 @@ SECRET_RE = re.compile(
 
 
 def redact(text):
-    """Commands, errors and answers all travel to a chat that lives on someone
-       else's servers forever. A key pasted into a command must not go with
-       them."""
+    """strip keys/tokens before anything goes to telegram"""
     return SECRET_RE.sub("[redacted]", str(text))
 
 
@@ -262,8 +246,6 @@ def num(n):
 
 
 def dur(sec, short=False):
-    """Short form is for tight spots (a bar label); long form reads as prose.
-       Units come from the table, or a Russian message ends in '36s'."""
     sec = int(sec)
     if sec < 60:
         return f"{sec}{t('u_s')}" if short else f"{sec} {t('u_sec')}"
@@ -290,7 +272,7 @@ def bar(pct, width=10):
 
 
 def left(when):
-    """Time until a reset, given either an epoch second or an ISO string."""
+    """time left until reset"""
     if when is None or when == "":
         return "?"
     try:
@@ -313,10 +295,7 @@ UNPRICED = set()
 
 
 def price_for(model_id):
-    """Longest matching id wins, so claude-sonnet-5 is never priced as 4.6.
-       Bedrock and Vertex dress the same model as `us.anthropic.claude-...-v1:0`
-       or `claude-...@20250929`; strip that before matching or the whole family
-       falls through to the fallback rate."""
+    """longest id prefix wins, bedrock/vertex prefixes stripped"""
     name = (model_id or "").strip()
     for prefix in ("us.anthropic.", "eu.anthropic.", "apac.anthropic.",
                    "global.anthropic.", "anthropic."):
@@ -360,7 +339,7 @@ def user_text(row):
 
 
 def last_request(rows):
-    """Text and timestamp of the last real thing the user asked for."""
+    """last real user message and its timestamp"""
     for row in reversed(rows):
         if row.get("type") != "user" or row.get("isSidechain"):
             continue
@@ -371,7 +350,6 @@ def last_request(rows):
 
 
 def title_context(rows):
-    """How the session opened, for naming it."""
     asks = []
     for row in rows:
         if row.get("type") != "user" or row.get("isSidechain"):
@@ -386,9 +364,7 @@ def title_context(rows):
 
 
 def error_text(rows):
-    """What actually went wrong, in Claude Code's own words. A failure message
-       that only says "failed" sends the person back to the terminal to find
-       out whether it was the rate limit, the network or their own code."""
+    """text of the last api error"""
     for row in reversed(rows[-ERROR_WINDOW:]):
         if not row.get("isApiErrorMessage"):
             continue
@@ -399,9 +375,7 @@ def error_text(rows):
 
 
 def tally(rows, since):
-    """Sums for the turn, priced as we go. One turn can mix models - a Haiku
-       label after an Opus run - and pricing the total at whichever model spoke
-       last understates the bill fivefold."""
+    """token sums for the turn, cost per row (models can mix)"""
     res = {"turn": {}, "model": "", "error": False, "turn_cost": 0.0}
     seen = set()
     for row in rows[-ERROR_WINDOW:]:
@@ -437,13 +411,12 @@ def cost(t, model_id):
 
 
 def billable(t):
-    """Tokens a person thinks of as spent: everything except cache reads."""
+    """everything except cache reads"""
     return (t.get("input_tokens", 0) + t.get("cache_creation_input_tokens", 0)
             + t.get("output_tokens", 0))
 
 
 def read_windows(source, pct_keys):
-    """Both limit windows in the shape the message builder expects."""
     out = {}
     for window, use, reset in (("five_hour", "sessionUsage", "sessionResetAt"),
                                ("seven_day", "weeklyUsage", "weeklyResetAt")):
@@ -457,7 +430,7 @@ def read_windows(source, pct_keys):
 
 
 def cached_limits():
-    """Numbers our statusline wrapper saw last. Official, local, free."""
+    """limits saved by statusline.py"""
     try:
         with open(LIMITS_CACHE) as f:
             data = json.load(f)
@@ -469,7 +442,6 @@ def cached_limits():
 
 
 def token_from(blob):
-    """Pull the access token out of whichever shape the credentials came in."""
     for holder in (blob.get("claudeAiOauth"), blob.get("oauth"), blob):
         if isinstance(holder, dict):
             tok = holder.get("accessToken") or holder.get("access_token")
@@ -479,11 +451,7 @@ def token_from(blob):
 
 
 def oauth_token():
-    """The user's token, from the two places Claude Code actually keeps it.
-
-    Deliberately narrow: the exact keychain service, or the credentials file.
-    Never a keychain dump: a plugin has no business reading the whole ring.
-    """
+    """oauth token: keychain, else credentials file"""
     try:
         with open(os.path.join(HOME, ".claude/.credentials.json")) as f:
             found = token_from(json.load(f))
@@ -503,7 +471,7 @@ def oauth_token():
 
 
 def api_limits():
-    """Undocumented usage endpoint. Off unless the user switched it on."""
+    """usage endpoint, undocumented, opt-in"""
     st = state()
     hit = st.get("usage_api") or {}
     if time.time() - hit.get("at", 0) < API_TTL:
@@ -547,10 +515,7 @@ def cli_version():
 
 
 def limits(_transcript_path=None):
-    """Best source first: our wrapper, then the endpoint if allowed, else nothing.
-
-    Nothing is a fine answer. The message still carries what the task cost.
-    """
+    """statusline cache, then api if enabled"""
     out = cached_limits()
     if out:
         return out
@@ -560,9 +525,7 @@ def limits(_transcript_path=None):
 
 
 def tab_name(path):
-    """The name Claude Code gave this tab. It writes one into the transcript as
-       `ai-title` and rewrites it as the work turns, so the last wins. Free,
-       instant, and the same words the person sees in their own sidebar."""
+    """tab name from ai-title records, last one wins"""
     found = ""
     try:
         handle = open(path, encoding="utf-8", errors="replace")
@@ -582,7 +545,7 @@ def tab_name(path):
 
 
 def title_for(text, session_id):
-    """A short task name. One Haiku call per session, cached after that."""
+    """task name via haiku, cached per session"""
     if not text:
         return "untitled"
     key = session_id or hashlib.sha1(text[:2000].encode()).hexdigest()[:12]
@@ -593,10 +556,7 @@ def title_for(text, session_id):
 
     title = ""
     if NAME_TASKS and os.path.exists(CLAUDE_BIN):
-        # The prompt carries text from the transcript, which may itself have
-        # come off a web page or a file, so the child gets no tools to be
-        # talked into using - and none of our settings, which include the bot
-        # token, to leak into whatever it spawns.
+        # no tools and no plugin env for the child: the prompt holds untrusted text
         child = {k: v for k, v in os.environ.items()
                  if not k.startswith("CLAUDE_PLUGIN_OPTION_")}
         child["CC_TG_NOTIFY_CHILD"] = "1"
@@ -623,9 +583,7 @@ def title_for(text, session_id):
 
 
 def window_cost(reset_iso, hours):
-    """What this rate-limit window has cost so far. Timestamps are compared as
-       datetimes, not as strings: "2026-09-08T15:00+03:00" sorts after
-       "2026-09-08T13:30Z" as text while being an hour and a half earlier."""
+    """cost of everything in the current window"""
     try:
         reset = datetime.fromisoformat(str(reset_iso).replace("Z", "+00:00"))
     except (ValueError, TypeError):
@@ -664,13 +622,7 @@ def window_cost(reset_iso, hours):
 
 
 def limit_share(lim, turn_cost, _model=None):
-    """This task's share of the 5-hour limit, finer than the whole percent we get.
-
-    Usage arrives rounded to integers, so one percent of a window is worth
-    knowing: divide what the window has cost by the percent it reports. That
-    rate is kept in state, which carries us through the start of a new window
-    while the reported percent is still zero.
-    """
+    """share of the 5h window for this turn"""
     st = state()
     used = lim.get("sessionUsage")
     per_pct = st.get("dollars_per_pct")
@@ -717,7 +669,7 @@ TOOL_EN = {
 
 
 def pending_tool(rows):
-    """The tool waiting on permission, and what it means to do."""
+    """pending tool and its input"""
     for row in reversed(rows):
         if row.get("type") != "assistant":
             continue
@@ -736,7 +688,7 @@ def pending_tool(rows):
 
 
 def pending_question(rows):
-    """The most recent question that nobody has answered yet."""
+    """last unanswered AskUserQuestion"""
     answered = set()
     for row in rows:
         content = (row.get("message") or {}).get("content")
@@ -881,9 +833,7 @@ STRINGS = {
 
 
 def lang():
-    """Whatever the person picked, else the language their Telegram is set to.
-       Telegram hands us `language_code` with the very first message, so the
-       right language is on screen before anyone opens the settings."""
+    """chosen lang, else telegram lang, else en"""
     saved = state().get("lang")
     if saved in STRINGS:
         return saved
@@ -904,13 +854,10 @@ SPEND_ROWS = 6
 
 
 def money(amount):
-    """Cents only where they carry information. A column of $254.44 next to
-       $0.92 wastes three characters of a phone's width on noise."""
     return f"${amount:.0f}" if amount >= 10 else f"${amount:.2f}"
 
 
 def short_tokens(n):
-    """51.6M, 570K, 940 - the width of the number matters more than its tail."""
     n = int(n)
     for cut, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
         if n >= cut:
@@ -923,10 +870,7 @@ TITLE_RE = re.compile(r'"aiTitle":\s*"((?:[^"\\]|\\.)*)"')
 
 
 def scan_session(path):
-    """One session: what it was called, what it cost. Claude Code writes the
-       tab name into the transcript as `ai-title` and rewrites it as the work
-       turns, so the last one wins. Dedup by requestId: usage repeats in every
-       record of a single request, and counting rows double-bills."""
+    """one transcript: title, tokens, cost"""
     seen, tokens, spent, title, first, last = set(), 0, 0.0, "", None, None
     try:
         handle = open(path, encoding="utf-8", errors="replace")
@@ -965,8 +909,7 @@ def scan_session(path):
 
 
 def scan_all():
-    """Every session across every project, dearest first. Cached: the
-       transcripts run to hundreds of megabytes and a tap should not stall."""
+    """all sessions, cached 5 min"""
     try:
         with open(SPEND_CACHE) as f:
             blob = json.load(f)
@@ -1037,14 +980,12 @@ APPROVE_WAIT = 60        # how long an approval button stays worth pressing
 APPROVE_POLL = 2
 
 
-# Approvals are the one event that is off until asked for: answering from the
-# phone means the hook holds the session while it waits, and nobody should
-# discover that by having their terminal pause for a minute.
+# approvals are off by default: the hook blocks the session while waiting
 EVENT_DEFAULTS = {"approve": False}
 
 
 def prefs():
-    """What the user picked in the bot, falling back to plugin config."""
+    """prefs from state, defaults from config"""
     saved = state().get("prefs") or {}
     out = {"min_seconds": saved.get("min_seconds", MIN_SECONDS)}
     events = saved.get("events") or {}
@@ -1074,9 +1015,6 @@ def view():
 
 
 def tab_row():
-    """The tabs, with the open one held in brackets. Telegram cannot colour a
-       button, and a tick here read as "Time is switched on" rather than "you
-       are standing in Time"."""
     here = view()
     return [{"text": ("\u2039 " + t(name) + " \u203a") if key == here else t(name),
              "callback_data": f"v:{key}"}
@@ -1084,9 +1022,7 @@ def tab_row():
 
 
 def keyboard():
-    """One message, four faces. The tab row is always there; the controls under
-       it belong to the open tab only, so nothing is on screen that the person
-       is not looking at."""
+    """keyboard for the current view"""
     here = view()
     rows = [tab_row()]
     now = prefs()
@@ -1104,8 +1040,7 @@ def keyboard():
     elif here == "spend":
         rows.append([{"text": t("refresh"), "callback_data": "v:spend!"}])
     else:
-        # only on the home screen: language is a once-in-a-lifetime choice and
-        # does not deserve a slot next to the things people actually tune
+        # language switch only on the home screen
         rows.append([{"text": ("‹ " + name.upper() + " ›") if name == lang()
                       else name.upper(), "callback_data": f"l:{name}"}
                      for name in STRINGS])
@@ -1113,8 +1048,6 @@ def keyboard():
 
 
 def head(tab):
-    """The tab name leads and carries the weight; the product name trails it.
-       Reading a lowercase word first made the whole thing look cheap."""
     return f"<b>{tab}</b>\n\n"
 
 
@@ -1137,8 +1070,6 @@ def time_text():
 
 
 def events_text():
-    """What each message means. Which ones are on is already written on the
-       buttons, so repeating it above them only crowds the screen."""
     legend = "\n".join(f"{t(short).capitalize()} \u2014 {t(note)}"
                        for _, short, note in EVENTS)
     return head(t("tab_messages")) + "<blockquote>" + esc(legend) + "</blockquote>"
@@ -1170,9 +1101,7 @@ def api(method, payload):
 
 
 def greet():
-    """Said once, when the bot and the person first meet. It answers the thing
-       they are actually worried about - being pestered - before listing
-       anything the plugin can do."""
+    """first message after pairing"""
     send("\n".join([
         f"<b>{t('connected')}</b>",
         "",
@@ -1202,8 +1131,7 @@ def show_menu(edit_id=None):
 
 
 def apply_choice(data):
-    """One tap: a new quiet threshold, one event switched over, or a change of
-       face between settings and the spend report."""
+    """handle one button press"""
     st = state()
     saved = st.get("prefs") or {}
     if data.startswith("l:"):
@@ -1246,8 +1174,7 @@ def apply_choice(data):
         if key not in {k for k, _, _ in EVENTS}:
             return ""
         events = saved.get("events") or {}
-        # flip from what the button shows, and `approve` starts off: against a
-        # plain default of True its first tap stored False and changed nothing
+        # flip from the shown value; approve defaults to off
         events[key] = not events.get(key, EVENT_DEFAULTS.get(key, True))
         saved["events"] = events
         st["prefs"] = saved
@@ -1257,9 +1184,7 @@ def apply_choice(data):
 
 
 def poll():
-    """Read what came in from the phone: the first hello, taps, /settings.
-       Telegram serves one getUpdates per bot at a time and answers the second
-       with 409, so stand aside while an approval is being waited on."""
+    """getUpdates: pairing, taps, commands"""
     if not BOT_TOKEN:
         return
     if os.path.exists(POLL_LOCK):
@@ -1286,8 +1211,7 @@ def poll():
                 continue
             data = tap.get("data", "")
             if data.startswith("p:"):
-                # an approval waiter is after this one, but the offset moves on
-                # either way, so hand it over through the state file
+                # an approval waiter needs this tap; pass it through state
                 parts = data.split(":")
                 if len(parts) == 3:
                     st3 = state()
@@ -1308,8 +1232,7 @@ def poll():
         if chat and not state().get("chat_id") and not CHAT_ID:
             st2 = state()
             st2["chat_id"] = str(chat)
-            # Telegram hands the person's own language over with their first
-            # message, so the right one is on screen before they open settings
+            # telegram sends language_code with the first message is on.
             st2["tg_lang"] = ((message.get("from") or {}).get("language_code") or "")
             save_state(st2)
             log(f"chat captured: {chat}")
@@ -1356,8 +1279,7 @@ def on_stop(data):
         except (ValueError, AttributeError, TypeError):
             pass
 
-    # Limits are cheap to read and matter even after a two-second stop, so they
-    # come first and unconditionally.
+    # limits first, they matter even for short stops
     lim = limits()
     if wants("limits"):
         limit_alerts(lim)
@@ -1369,15 +1291,12 @@ def on_stop(data):
     elif elapsed < threshold or not wants("done"):
         return
 
-    # Only now the expensive part: the share of the window this turn ate is
-    # worked out by scanning every recent transcript.
+    # expensive part: scans recent transcripts
     share = limit_share(lim, tal["turn_cost"])
 
     head = ("🔴 " + t("failed")) if tal["error"] else ("🟢 " + t("done"))
     name = tab_name(path) or title_for(ctx, data.get("session_id"))
-    # a failure ends on an error, not on an answer: show the error instead
-    # an untrimmed stack trace runs past Telegram's 4096 characters and the
-    # whole message fails to send - the person never learns the task died
+    # failed run: show the error, not the last answer
     last = summary(error_text(rows) if tal["error"] else "") \
         or summary(data.get("last_assistant_message") or "")
 
@@ -1395,7 +1314,7 @@ def on_stop(data):
 
 
 def summary(text, max_lines=10, max_chars=700):
-    """The tail of the answer: ten lines at most, cut on a sentence end."""
+    """up to 10 lines / 700 chars, cut at a sentence"""
     lines = [re.sub(r"[ \t]+", " ", ln).strip()
              for ln in text.splitlines()]
     lines = [ln for ln in lines if ln]
@@ -1432,8 +1351,7 @@ def on_notification(data):
         head = f"🟠 <b>{t('wants_answer')}</b>"
         body = f"<blockquote>{esc(question[:600])}</blockquote>"
         if opts:
-            # each choice on its own line: a slash-joined string read as one
-            # long option and the descriptions had nowhere to go
+            # one option per line
             picks = []
             for i, o in enumerate(opts, 1):
                 block = f"<b>{i}. {esc((o.get('label') or '')[:120])}</b>"
@@ -1441,11 +1359,9 @@ def on_notification(data):
                 if note:
                     block += f"\n<i>{esc(note[:90])}</i>"
                 picks.append(block)
-            # a blank line between choices: run together they read as one
-            # paragraph and the eye cannot find where an option starts
+            # blank line between options
             body += "\n" + "\n\n".join(picks)
-        # no buttons here on purpose: a hook can return yes or no, never an
-        # answer, so a tap could not reach the session. Say where to go instead.
+        # no buttons: a hook can only answer yes/no, not pick an option not reach.
         body += f"\n\n<b>{t('go_terminal')}</b>"
     elif "permission" in raw.lower():
         if not wants("permission"):
@@ -1460,8 +1376,7 @@ def on_notification(data):
         head = f"🟠 <b>{t('waiting')}</b>"
         body = f"{t('stopped_alone')}\n\n<b>{t('go_terminal')}</b>"
 
-    # the cooldown starts only once something is actually said: a muted kind
-    # must not stand in the way of the next one that is not
+    # cooldown only after a real send
     st["last_notify"] = now
     save_state(st)
 
@@ -1470,12 +1385,7 @@ def on_notification(data):
 
 
 def limit_alerts(lim):
-    """One message, and only once a window is actually spent. Warning at 80 and
-       again at 95 filled the chat with things nobody could act on; being out is
-       the only moment that changes what the person does next. Both bars ride
-       along, because the answer to "what now" is whether the other one holds.
-       A window counts as announced only after Telegram takes the message: an
-       unpaired chat or a dead network must not eat the one warning there is."""
+    """one message per window, only at 100%"""
     st = state()
     fired = st.get("limit_alerts", {})
     spent = []
@@ -1517,10 +1427,7 @@ POLL_LOCK = os.path.join(DATA, "poll.lock")
 
 
 def take_poll_lock(tag):
-    """The newest ask owns the bot. An older waiter whose prompt the person
-       already answered in the terminal would otherwise sit there for two
-       minutes holding the only long poll Telegram allows, and every ask after
-       it would fall through to the terminal as well."""
+    """newest ask takes the poll lock"""
     try:
         os.makedirs(DATA, exist_ok=True)
         with open(POLL_LOCK, "w") as f:
@@ -1546,9 +1453,7 @@ def drop_poll_lock():
 
 
 def from_owner(tap):
-    """A tap is only ours if it came from the chat we write to. Without this
-       anyone who reaches the bot - a group member, or whoever pressed Start
-       first - could approve a command on this machine."""
+    """only taps from our chat count"""
     owner = str(chat_id() or "")
     if not owner:
         return False
@@ -1558,13 +1463,7 @@ def from_owner(tap):
 
 
 def verdict(behavior, message=""):
-    """`decision` is an object, not a string. Claude Code reads
-       `hookSpecificOutput.decision.behavior`, so a bare "allow" carries no
-       decision at all and the ask quietly falls through to the terminal -
-       which is exactly what it did until this was found.
-
-       Saying nothing is how a hook declines to decide: an absent `decision`
-       leaves the normal permission flow untouched."""
+    """hook answer; decision is an object with behavior"""
     if behavior not in ("allow", "deny"):
         return {"hookSpecificOutput": {"hookEventName": "PermissionRequest"}}
     block = {"behavior": behavior}
@@ -1575,8 +1474,7 @@ def verdict(behavior, message=""):
 
 
 def ask_and_wait(text, tag):
-    """Put the ask in front of the person with two buttons and wait for a tap.
-       Returns "allow", "deny", or "" when nobody answered in time."""
+    """send allow/deny buttons and wait"""
     chat = chat_id()
     if not chat:
         return ""
@@ -1589,8 +1487,7 @@ def ask_and_wait(text, tag):
     if not mid:
         return ""
 
-    # Telegram allows one long poll per bot, so only one waiter may run. This
-    # ask claims it; any older waiter sees the claim and steps aside.
+    # Telegram allows one long poll per bot, so only one waiter may run.
     take_poll_lock(tag)
 
     st = state()
@@ -1625,8 +1522,7 @@ def ask_and_wait(text, tag):
             tap = update.get("callback_query") or {}
             data = tap.get("data", "")
             if not data.startswith("p:") or not data.endswith(f":{tag}"):
-                # somebody tapped a menu button while we were waiting; the
-                # offset moves on regardless, so keep it for poll() to apply
+                # menu tap during a wait: keep it for poll()
                 if data and from_owner(tap):
                     stash = state()
                     queued = stash.get("queued") or []
@@ -1663,9 +1559,7 @@ def ask_and_wait(text, tag):
 
 
 def on_permission_request(data):
-    """Claude Code wants to run something and is waiting on a decision. We only
-       ever carry a yes or a no: nothing can be typed into the session from the
-       phone, so a stolen chat cannot compose its own commands."""
+    """PermissionRequest hook"""
     if not BOT_TOKEN or not wants("approve"):
         return verdict("")
     tool = data.get("tool_name") or ""
@@ -1685,8 +1579,7 @@ def on_permission_request(data):
     if detail:
         text += f"\n<blockquote>{esc(detail[:600])}</blockquote>"
 
-    # a fresh tag per ask: with a shared fallback like "ask", a stale tap on
-    # yesterday's message would approve today's command
+    # fresh tag per ask, or an old tap could approve a new command
     picked = ask_and_wait(text, secrets.token_urlsafe(6))
     if picked in ("allow", "deny"):
         log(f"approval {picked} for {tool}")
@@ -1695,7 +1588,7 @@ def on_permission_request(data):
 
 
 def detach(payload):
-    """A hook must not hold Claude Code up, so the work happens detached."""
+    """re-exec detached so the hook returns fast"""
     try:
         child = subprocess.Popen(
             [sys.executable, os.path.abspath(__file__)],
@@ -1712,9 +1605,7 @@ def main():
     try:
         run()
     except Exception:
-        # The child runs with stderr closed, so an unhandled error used to
-        # vanish completely: notifications simply stopped and there was
-        # nothing anywhere to explain why.
+        # stderr is closed in the child, so log the crash
         import traceback
         log("crashed: " + traceback.format_exc(limit=6).replace("\n", " | "))
 
@@ -1726,8 +1617,7 @@ def run():
     except Exception:
         return
     event = data.get("hook_event_name")
-    # An approval has to answer Claude Code, so this one stays in the
-    # foreground and prints its verdict. Everything else is fire-and-forget.
+    # approvals must answer synchronously, everything else detaches
     if event == "PermissionRequest":
         print(json.dumps(on_permission_request(data)))
         return
