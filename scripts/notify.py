@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 if os.environ.get("CC_TG_NOTIFY_CHILD"):
     sys.exit(0)
 
+os.umask(0o077)          # what we write is nobody else's business
 HOME = os.path.expanduser("~")
 DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.join(HOME, ".cctab")
 STATE_FILE = os.path.join(DATA, "state.json")
@@ -131,19 +133,49 @@ def state():
     try:
         with open(STATE_FILE) as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
         return {}
+    except Exception:
+        # A half-written file must not read as "offset 0": Telegram would then
+        # replay the whole backlog, including yesterday's approval taps.
+        try:
+            os.replace(STATE_FILE, STATE_FILE + ".bad")
+            log("state file was unreadable, moved aside")
+        except OSError:
+            pass
+        return {"offset": -1}
 
 
 def save_state(s):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(STATE_FILE), mode=0o700, exist_ok=True)
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(s, f, ensure_ascii=False)
     os.replace(tmp, STATE_FILE)
 
 
+SECRET_RE = re.compile(
+    r"(?i)("
+    r"sk-[A-Za-z0-9_-]{16,}"                       # OpenAI-shaped keys
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"                 # GitHub tokens
+    r"|xox[baprs]-[\w-]{10,}"                      # Slack
+    r"|AKIA[0-9A-Z]{16}"                           # AWS access key id
+    r"|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{6,}"       # JWT
+    r"|\d{8,10}:AA[\w-]{30,}"                      # Telegram bot token
+    r"|(?:password|passwd|token|secret|api[_-]?key|bearer)\s*[=:]\s*\S+"
+    r"|://[^/\s:@]+:[^@\s]+@"                      # user:pass in a URL
+    r")")
+
+
+def redact(text):
+    """Commands, errors and answers all travel to a chat that lives on someone
+       else's servers forever. A key pasted into a command must not go with
+       them."""
+    return SECRET_RE.sub("[redacted]", str(text))
+
+
 def esc(s):
+    s = redact(s)
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -171,7 +203,11 @@ def dur(sec, short=False):
 
 
 def bar(pct, width=10):
-    pct = max(0, min(100, pct or 0))
+    try:
+        pct = float(pct or 0)
+    except (TypeError, ValueError):
+        pct = 0
+    pct = max(0, min(100, pct))
     return "▰" * int(round(pct / 100 * width)) + "▱" * (width - int(round(pct / 100 * width)))
 
 
@@ -461,11 +497,18 @@ def title_for(text, session_id):
 
     title = ""
     if NAME_TASKS and os.path.exists(CLAUDE_BIN):
-        child = dict(os.environ, CC_TG_NOTIFY_CHILD="1")
+        # The prompt carries text from the transcript, which may itself have
+        # come off a web page or a file, so the child gets no tools to be
+        # talked into using — and none of our settings, which include the bot
+        # token, to leak into whatever it spawns.
+        child = {k: v for k, v in os.environ.items()
+                 if not k.startswith("CLAUDE_PLUGIN_OPTION_")}
+        child["CC_TG_NOTIFY_CHILD"] = "1"
         try:
             r = subprocess.run(
                 [CLAUDE_BIN, "-p", TITLE_PROMPT + text[:1500],
-                 "--model", "haiku", "--disable-slash-commands"],
+                 "--model", "haiku", "--disable-slash-commands",
+                 "--permission-mode", "plan", "--allowed-tools", ""],
                 capture_output=True, text=True, timeout=60, env=child, cwd=HOME)
             title = r.stdout.strip().strip('"').split("\n")[0][:60]
         except Exception:
@@ -767,7 +810,7 @@ def short_tokens(n):
     return str(n)
 
 
-TITLE_RE = re.compile(r'"aiTitle":\s*"((?:[^"\\\\]|\\\\.)*)"')
+TITLE_RE = re.compile(r'"aiTitle":\s*"((?:[^"\\]|\\.)*)"')
 
 
 def scan_session(path):
@@ -832,9 +875,11 @@ def scan_all():
             first = got["first"]
     rows.sort(key=lambda r: r["cost"], reverse=True)
     try:
-        os.makedirs(DATA, exist_ok=True)
-        with open(SPEND_CACHE, "w") as f:
+        os.makedirs(DATA, mode=0o700, exist_ok=True)
+        tmp = SPEND_CACHE + ".tmp"
+        with open(tmp, "w") as f:
             json.dump({"at": time.time(), "rows": rows, "first": first}, f)
+        os.replace(tmp, SPEND_CACHE)   # a reader must never see half a file
     except OSError:
         pass
     return rows, first
@@ -1051,6 +1096,8 @@ def apply_choice(data):
         return ""
     if data.startswith("v:"):
         want = data[2:]
+        if want.rstrip("!") not in {k for k, _ in TABS} | {"home"}:
+            return ""
         if want.endswith("!"):          # refresh: drop the cache, rescan
             want = want[:-1]
             try:
@@ -1077,6 +1124,8 @@ def apply_choice(data):
         return t("saved")
     if data.startswith("e:"):
         key = data[2:]
+        if key not in {k for k, _, _ in EVENTS}:
+            return ""
         events = saved.get("events") or {}
         events[key] = not events.get(key, True)
         saved["events"] = events
@@ -1105,10 +1154,26 @@ def poll():
     seen = offset
     touched = False
     for update in body.get("result", []):
-        seen = update["update_id"] + 1
+        seen = update.get("update_id", seen - 1) + 1
         tap = update.get("callback_query")
         if tap:
-            note = apply_choice(tap.get("data", ""))
+            if not from_owner(tap):
+                continue
+            data = tap.get("data", "")
+            if data.startswith("p:"):
+                # an approval waiter is after this one, but the offset moves on
+                # either way, so hand it over through the state file
+                parts = data.split(":")
+                if len(parts) == 3:
+                    st3 = state()
+                    pending = st3.get("approvals") or {}
+                    pending[parts[2]] = parts[1]
+                    st3["approvals"] = pending
+                    save_state(st3)
+                    api("answerCallbackQuery", {"callback_query_id": tap.get("id"),
+                                                "text": parts[1]})
+                continue
+            note = apply_choice(data)
             api("answerCallbackQuery", {"callback_query_id": tap["id"], "text": note})
             touched = True
             continue
@@ -1335,6 +1400,18 @@ def drop_poll_lock():
         pass
 
 
+def from_owner(tap):
+    """A tap is only ours if it came from the chat we write to. Without this
+       anyone who reaches the bot — a group member, or whoever pressed Start
+       first — could approve a command on this machine."""
+    owner = str(chat_id() or "")
+    if not owner:
+        return False
+    who = str((tap.get("from") or {}).get("id") or "")
+    where = str(((tap.get("message") or {}).get("chat") or {}).get("id") or "")
+    return owner in (who, where)
+
+
 def verdict(decision):
     """Both spellings on purpose. The docs call this field `decision` in one
        place and `permissionDecision` in another; whichever Claude Code reads,
@@ -1366,8 +1443,12 @@ def ask_and_wait(text, tag):
     st = state()
     offset = st.get("offset", 0)
     deadline = time.time() + APPROVE_WAIT
-    picked = ""
+    picked, misses = "", 0
     while time.time() < deadline and not picked:
+        handed = (state().get("approvals") or {}).pop(tag, "")
+        if handed:
+            picked = handed
+            break
         if not holds_poll_lock(tag):
             api("editMessageText", {"chat_id": chat, "message_id": mid,
                                     "parse_mode": "HTML",
@@ -1379,16 +1460,26 @@ def ask_and_wait(text, tag):
                 timeout=10).read()
             body = json.loads(raw)
         except Exception as err:
+            misses += 1
             log(f"approval poll failed: {err}")
-            break
+            if misses >= 3:
+                break
+            time.sleep(APPROVE_POLL)
+            continue
         for update in body.get("result", []):
-            offset = update["update_id"] + 1
+            offset = update.get("update_id", offset - 1) + 1
             tap = update.get("callback_query") or {}
             data = tap.get("data", "")
-            if data.startswith("p:") and data.endswith(f":{tag}"):
-                picked = data.split(":")[1]
-                api("answerCallbackQuery", {"callback_query_id": tap["id"],
-                                            "text": picked})
+            if not data.startswith("p:") or not data.endswith(f":{tag}"):
+                continue
+            if not from_owner(tap):
+                log("approval tap from a stranger, ignored")
+                continue
+            if ((tap.get("message") or {}).get("message_id")) != mid:
+                continue
+            picked = data.split(":")[1]
+            api("answerCallbackQuery", {"callback_query_id": tap.get("id"),
+                                        "text": picked})
         if not picked:
             time.sleep(APPROVE_POLL)
 
@@ -1396,6 +1487,9 @@ def ask_and_wait(text, tag):
         drop_poll_lock()
     st = state()
     st["offset"] = max(offset, st.get("offset", 0))
+    pending = st.get("approvals") or {}
+    pending.pop(tag, None)
+    st["approvals"] = pending
     save_state(st)
 
     closing = {"allow": t("allowed_here"), "deny": t("denied_here")}.get(
@@ -1428,7 +1522,9 @@ def on_permission_request(data):
     if detail:
         text += f"\n<blockquote>{esc(detail[:600])}</blockquote>"
 
-    picked = ask_and_wait(text, str(data.get("tool_use_id", ""))[-12:] or "ask")
+    # a fresh tag per ask: with a shared fallback like "ask", a stale tap on
+    # yesterday's message would approve today's command
+    picked = ask_and_wait(text, secrets.token_urlsafe(6))
     if picked in ("allow", "deny"):
         log(f"approval {picked} for {tool}")
         return verdict(picked)
