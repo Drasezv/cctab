@@ -50,6 +50,7 @@ class Base(unittest.TestCase):
         self.m.LOG_FILE = os.path.join(self.tmp, "log")
         self.m.SPEND_CACHE = os.path.join(self.tmp, "spend.json")
         self.m.POLL_LOCK = os.path.join(self.tmp, "poll.lock")
+        self.m.POLL_MUTEX = os.path.join(self.tmp, "poll.mutex")
 
     def transcript(self, rows):
         path = os.path.join(self.tmp, "t.jsonl")
@@ -433,6 +434,7 @@ class EndToEnd(unittest.TestCase):
         self.m.LOG_FILE = os.path.join(self.tmp, "log")
         self.m.SPEND_CACHE = os.path.join(self.tmp, "spend.json")
         self.m.POLL_LOCK = os.path.join(self.tmp, "poll.lock")
+        self.m.POLL_MUTEX = os.path.join(self.tmp, "poll.mutex")
         self.m.LIMITS_CACHE = os.path.join(self.tmp, "limits.json")
         self.m.PROJECTS_ROOT = os.path.join(self.tmp, "projects")
         self.m.BOT_TOKEN = "test-token"

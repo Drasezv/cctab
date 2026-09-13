@@ -109,8 +109,28 @@ TITLE_PROMPT = (
 )
 
 
+def pairing_nonce():
+    """the one-off payload setup.py put in the link, while it is still good"""
+    cfg = saved_config()
+    nonce = str(cfg.get("pair_nonce", "")).strip()
+    if not nonce:
+        return ""
+    try:
+        until = float(cfg.get("pair_until", 0))
+    except (TypeError, ValueError):
+        return ""
+    return nonce if time.time() < until else ""
+
+
+def remember_chat(st, chat, how):
+    st["chat_id"] = str(chat)
+    save_state(st)
+    log(f"chat captured, {how}: {chat}")
+    return str(chat)
+
+
 def chat_id():
-    """chat id: config, then state, then first message to the bot"""
+    """chat id: config, then state, then whoever opened the pairing link"""
     if CHAT_ID:
         return CHAT_ID
     st = state()
@@ -120,7 +140,7 @@ def chat_id():
         return ""
     try:
         raw = urllib.request.urlopen(
-            f"{TELEGRAM_API}{BOT_TOKEN}/getUpdates?limit=1&timeout=0", timeout=10).read()
+            f"{TELEGRAM_API}{BOT_TOKEN}/getUpdates?limit=100&timeout=0", timeout=10).read()
         body = json.loads(raw)
     except Exception as err:
         log(f"getUpdates failed: {err}")
@@ -128,13 +148,23 @@ def chat_id():
     if not body.get("ok"):
         log(f"getUpdates refused: {str(body)[:160]}")
         return ""
+    want = pairing_nonce()
+    # limit=1 used to hand back the newest update, which is anything the user
+    # happened to send the bot before installing. walk them and look for ours.
+    earliest = ""
     for update in body.get("result", []):
-        found = ((update.get("message") or {}).get("chat") or {}).get("id")
-        if found:
-            st["chat_id"] = str(found)
-            save_state(st)
-            log(f"chat captured: {found}")
-            return str(found)
+        message = update.get("message") or {}
+        found = (message.get("chat") or {}).get("id")
+        if not found:
+            continue
+        if want and (message.get("text") or "").strip() == f"/start {want}":
+            return remember_chat(st, found, "pairing link")
+        earliest = earliest or found
+    if want:
+        log("pairing link not opened yet")
+        return ""
+    if earliest:
+        return remember_chat(st, earliest, "first message")
     log("no messages to the bot yet")
     return ""
 
@@ -1303,7 +1333,11 @@ def handle_update(update):
         message = update.get("message") or {}
         text = (message.get("text") or "").strip().lower()
         chat = (message.get("chat") or {}).get("id")
-        if chat and not state().get("chat_id") and not CHAT_ID:
+        want = pairing_nonce()
+        # the nonce is case sensitive, so match the text as it arrived
+        opened_link = (message.get("text") or "").strip() == f"/start {want}"
+        if chat and not state().get("chat_id") and not CHAT_ID and (
+                not want or opened_link):
             st2 = state()
             st2["chat_id"] = str(chat)
             # telegram sends language_code with the first message is on.
@@ -1325,7 +1359,7 @@ def handle_update(update):
             st2 = state()
             st2.pop("awaiting", None)     # not a number, stop waiting for one
             save_state(st2)
-        elif text in ("/settings", "/start", "settings", "/spend", "spend"):
+        elif text.split(" ")[0] in ("/settings", "/start", "settings", "/spend", "spend"):
             st2 = state()
             st2["view"] = "spend" if text.lstrip("/") == "spend" else "home"
             save_state(st2)

@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -89,6 +90,28 @@ def remember(token):
         json.dump(saved, f)
     os.replace(tmp, path)
     os.chmod(path, 0o600)
+
+
+PAIRING_TTL = 900        # ссылка живёт столько же, сколько окно установки
+
+
+def arm_pairing():
+    """one-shot payload for the link, so a stranger cannot claim the chat"""
+    os.makedirs(DATA, mode=0o700, exist_ok=True)
+    path = os.path.join(DATA, "config.json")
+    try:
+        saved = json.load(open(path))
+    except Exception:
+        saved = {}
+    nonce = secrets.token_urlsafe(9)
+    saved["pair_nonce"] = nonce
+    saved["pair_until"] = int(time.time()) + PAIRING_TTL
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(saved, f)
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    return nonce
 
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
@@ -183,10 +206,11 @@ def main():
         print("Updates go there instead of to us. Remove it with deleteWebhook first.\n")
 
     remember(token)
-    link = f"https://t.me/{username}?start=cctab"
+    link = f"https://t.me/{username}?start={arm_pairing()}"
     print(f"Bot is alive: @{username}\n")
     print(f"Open {link} and press Start.")
-    print("Whatever you send first tells cctab where to reach you.\n")
+    print("The link carries a one-off code and stops working in 15 minutes, so")
+    print("only whoever opens it becomes the chat cctab writes to.\n")
     art = qr(link)
     if art:
         print(art)

@@ -63,8 +63,10 @@ already put there.
 /plugin install cctab
 ```
 
-Then ask Claude to set up cctab. It gives you a free bot username, the lines for
-@BotFather, and takes the token. Press Start in the chat. About forty seconds.
+Claude sees there is no bot yet and offers to connect one, so you do not have to
+ask. It gives you a bot username nobody has taken, the lines for @BotFather, and
+takes the token back. Then open the link it prints, or scan the QR code with your
+phone, and press Start. About forty seconds.
 
 The token goes to `~/.cctab/config.json`, readable only by you. Paste it into
 the plugin's `bot_token` setting to move it into the keychain.

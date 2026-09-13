@@ -1,5 +1,10 @@
 {
   "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear", "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session_start.py", "timeout": 10 }
+      ]}
+    ],
     "Stop": [
       { "matcher": "", "hooks": [
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/notify.py", "timeout": 90 }
