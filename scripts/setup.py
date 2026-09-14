@@ -83,19 +83,20 @@ def managed_link(code):
 
 
 def claim(code, until):
-    """(token, owner, why): why is empty, 'expired' or 'unreachable'"""
+    """(token, owner, lang, why): why is empty, 'expired' or 'unreachable'"""
     while time.time() < until:
         try:
             with urllib.request.urlopen(CLAIM + code, timeout=10) as r:
                 body = json.loads(r.read())
             if body.get("token"):
-                return body["token"], str(body.get("owner") or ""), ""
+                return (body["token"], str(body.get("owner") or ""),
+                        body.get("lang") or "", "")
         except urllib.error.HTTPError:
             pass                         # 404 until they confirm the window
         except Exception:
-            return "", "", "unreachable"
+            return "", "", "", "unreachable"
         time.sleep(3)
-    return "", "", "expired"
+    return "", "", "", "expired"
 
 
 AVATAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "avatar.jpg")
@@ -236,6 +237,16 @@ def wait_for_start(token, nonce, until, owner=""):
             return chat
         time.sleep(2)
     return ""
+
+
+def greet_owner(token, owner, lang):
+    """a bot made through the manager may write to its creator first, no Start"""
+    if not call(token, "sendMessage", {
+            "chat_id": owner,
+            "text": GREETING_RU if lang.startswith("ru") else GREETING}):
+        return False
+    save_chat(owner, lang)
+    return True
 
 
 def print_botfather():
@@ -400,7 +411,7 @@ def main():
         if not cfg.get("create_code"):
             print("NO_LINK run setup.py link first")
             return 1
-        token, owner, why = claim(cfg["create_code"], float(cfg.get("create_until", 0)))
+        token, owner, lang, why = claim(cfg["create_code"], float(cfg.get("create_until", 0)))
         if why == "expired":
             print("EXPIRED nobody confirmed the window within 3 minutes")
             return 2
@@ -415,7 +426,11 @@ def main():
         cfg = config()
         cfg["owner_id"] = owner
         save_config(cfg)
-        # Telegram opens the new bot's chat by itself, their Start there is the last step
+        if greet_owner(token, owner, lang):
+            print("CONNECTED")
+            return 0
+        # Telegram would not let the bot speak first, so a Start is needed after all
+        print("START the bot could not write first, waiting for Start in its chat")
         if not wait_for_start(token, "", time.time() + PAIRING_TTL, owner=owner):
             print("EXPIRED nobody pressed Start within 3 minutes")
             return 2
@@ -437,6 +452,9 @@ def main():
         if not cfg.get("bot_token") or not (owner or cfg.get("pair_nonce")):
             print("NO_BOT run setup.py wait first")
             return 1
+        if owner and greet_owner(cfg["bot_token"], owner, ""):
+            print("CONNECTED")
+            return 0
         # with the owner known a plain Start is enough, and the clock starts now
         until = time.time() + PAIRING_TTL if owner else float(cfg.get("pair_until", 0))
         if not wait_for_start(cfg["bot_token"], cfg.get("pair_nonce", ""), until, owner=owner):

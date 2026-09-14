@@ -23,8 +23,9 @@ cannot be clicked.
 Run `setup.py status`.
 
 - `READY @name`: already connected. Say so, mention `/settings` in the bot, stop.
-- `NOT_PAIRED @name owner`: the bot exists, nobody pressed Start. Tell them to
-  open @name in Telegram and press Start, then same turn run `setup.py pair`.
+- `NOT_PAIRED @name owner`: the bot exists but has no chat yet. Run
+  `setup.py pair`; it normally connects at once. If it ends `EXPIRED`, tell
+  them to open @name in Telegram, press Start, and run `pair` again.
 - `NOT_PAIRED @name link`: run `setup.py relink` and go to "Start link" below.
 - `NO_BOT`: ask one question and end your turn: a link, or a QR code to scan
   with the phone?
@@ -36,20 +37,19 @@ Run `setup.py link`, or `setup.py link --qr` if they chose the QR. It prints
 their screen.
 
 Send one message: the link as a bare URL (and that the QR is on the screen, if
-they chose it), then two short lines. Confirm the window Telegram opens, the
-name and username are already filled in. Then press Start in the bot chat that
-opens right after. Nothing else is needed.
+they chose it), then one line: confirm the window Telegram opens, the name and
+username are already filled in, and that is all. Do not mention Start.
 
 Then, same turn, run `setup.py wait`. It waits up to 3 minutes for the window,
-dresses the bot, then waits up to 3 more for Start.
+dresses the bot, and has the bot write to them.
 
 ## 2. What `wait` prints
 
-- `BOT @name`, `DRESSED ...`, `CONNECTED`: done. A welcome message is already in
-  their Telegram. Nothing arrives until a task runs past 30 minutes; `/settings`
-  in the bot changes that, `/spend` shows the cost per tab.
-- `BOT ...` then `EXPIRED`: the bot exists but Start was not pressed. Tell them
-  to press Start in @name, then run `setup.py pair`.
+- `BOT @name`, `DRESSED ...`, `CONNECTED`: done. The bot has already written to
+  them in Telegram. Nothing else arrives until a task runs past 30 minutes;
+  `/settings` in the bot changes that, `/spend` shows the cost per tab.
+- `START` then `EXPIRED`: Telegram would not let the bot write first. Tell them
+  to open @name, press Start, then run `setup.py pair`.
 - `EXPIRED` alone: nobody confirmed the window. Say the link ran out and that
   typing cctab again gives a fresh one. Stop.
 - `PAIR <url>`: an older path that needs a Start link. Go to "Start link".
