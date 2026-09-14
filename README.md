@@ -82,9 +82,9 @@ That is the whole instruction. Claude walks you through the rest.
 
 Connecting is a link, or a QR code if you would rather scan it with your phone.
 Telegram opens a window with the bot's name and username filled in; confirm it.
-No @BotFather and no token to copy: cctab picks the token up, sets the bot's
-name, description, commands and picture, and gives you one more link. Open it,
-press Start, done.
+That is the last thing you do. No @BotFather, no token to copy, no Start: cctab
+picks the token up, sets the bot's name, description, commands and picture, and
+the bot writes to you on its own.
 
 The token goes to `~/.cctab/config.json`, readable only by you.
 
@@ -129,7 +129,7 @@ Plugin settings, for the things you set once:
 
 | Option | Default | |
 |---|---|---|
-| `bot_token` | none | From @BotFather |
+| `bot_token` | none | Filled in by setup; from @BotFather only if the link fails |
 | `chat_id` | auto | Taken from your first message to the bot |
 | `min_seconds` | 1800 | Starting threshold, changeable from the phone |
 | `statusline_command` | none | Your statusline, run after ours |
