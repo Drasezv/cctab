@@ -188,7 +188,13 @@ def save_qr(text, name):
     except ImportError:
         return ""
     os.makedirs(DATA, mode=0o700, exist_ok=True)
-    path = os.path.join(DATA, name)
+    base = name.rsplit(".", 1)[0]
+    for old in os.listdir(DATA):
+        if old.startswith(base) and old.endswith(".png"):
+            os.remove(os.path.join(DATA, old))
+    # a new name every time: Preview reopens a path it already has and shows
+    # the old picture, so people scanned a code for a bot that already existed
+    path = os.path.join(DATA, f"{base}-{secrets.token_hex(4)}.png")
     qrcode.make(text).save(path)
     if sys.platform == "darwin":
         subprocess.run(["open", path], check=False)
