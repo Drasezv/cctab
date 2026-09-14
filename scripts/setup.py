@@ -6,6 +6,7 @@ import re
 import secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -90,6 +91,88 @@ def remember(token):
         json.dump(saved, f)
     os.replace(tmp, path)
     os.chmod(path, 0o600)
+
+
+MANAGER = "cctab_manager_bot"
+CLAIM = "https://helsinki.lunace.ru/cctab/claim/"
+
+
+def managed_link(code):
+    """the window where the username and the name are already filled in"""
+    return f"https://t.me/newbot/{MANAGER}/cctab_{code}_bot?name=cctab"
+
+
+def claim(code, seconds=180):
+    """our side of the handover: the manager leaves the token under the code"""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(CLAIM + code, timeout=10) as r:
+                body = json.loads(r.read())
+            if body.get("token"):
+                return body["token"]
+        except urllib.error.HTTPError:
+            pass                         # 404 until they finish the window
+        except Exception:
+            return ""                    # nothing listening, take the long way
+        time.sleep(3)
+    return ""
+
+
+AVATAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "avatar.jpg")
+COMMANDS = [("settings", "thresholds, messages, spend"),
+            ("spend", "what every tab cost")]
+
+
+def call(token, method, payload):
+    data = urllib.parse.urlencode(payload).encode()
+    try:
+        body = json.loads(urllib.request.urlopen(
+            f"{TELEGRAM_API}{token}/{method}", data=data, timeout=10).read())
+        return bool(body.get("ok"))
+    except Exception:
+        return False
+
+
+def upload_photo(token, path):
+    """setMyProfilePhoto wants multipart, so build one by hand"""
+    line = "--" + secrets.token_hex(16)
+    head = (f'{line}\r\nContent-Disposition: form-data; name="photo"\r\n\r\n'
+            '{"type":"static","photo":"attach://pic"}\r\n'
+            f'{line}\r\nContent-Disposition: form-data; name="pic"; filename="a.jpg"\r\n'
+            "Content-Type: image/jpeg\r\n\r\n")
+    try:
+        with open(path, "rb") as f:
+            blob = head.encode() + f.read() + f"\r\n{line}--\r\n".encode()
+        req = urllib.request.Request(
+            f"{TELEGRAM_API}{token}/setMyProfilePhoto", data=blob,
+            headers={"Content-Type": f"multipart/form-data; boundary={line[2:]}"})
+        return bool(json.loads(urllib.request.urlopen(req, timeout=20).read()).get("ok"))
+    except Exception:
+        return False
+
+
+def dress_up(token):
+    """name, blurbs, commands and the picture, so BotFather is not needed for them"""
+    done = []
+    if call(token, "setMyName", {"name": "cctab"}):
+        done.append("name")
+    if call(token, "setMyShortDescription", {
+            "short_description": "Says when a long Claude Code task is done, "
+                                 "and what it cost."}):
+        done.append("blurb")
+    if call(token, "setMyDescription", {
+            "description": "I write here when a task in Claude Code has been "
+                           "running long enough to be worth telling you about: "
+                           "what it was, what it cost, and how much of your rate "
+                           "limit is left. Send /settings to change any of that."}):
+        done.append("about")
+    if call(token, "setMyCommands", {"commands": json.dumps(
+            [{"command": c, "description": d} for c, d in COMMANDS])}):
+        done.append("commands")
+    if os.path.exists(AVATAR) and upload_photo(token, AVATAR):
+        done.append("picture")
+    return done
 
 
 PAIRING_TTL = 900        # ссылка живёт столько же, сколько окно установки
@@ -180,7 +263,18 @@ def main():
         # an argument is visible in `ps` and lands in the shell history
         token = sys.stdin.readline().strip()
     if not token:
+        code = secrets.token_hex(3)
+        link = managed_link(code)
+        print("Open this, or scan it with your phone, and confirm the window:\n")
+        print(f"  {link}\n")
+        art = qr(link)
+        if art:
+            print(art)
+        print("The name and the username are filled in already. Waiting for it...")
+        token = claim(code)
+    if not token:
         name = suggest()
+        print("\nNothing came back, so here is the long way.")
         print("Open @BotFather and send these three, one after another:\n")
         print("  /newbot")
         print("  cctab notifications")
@@ -206,8 +300,11 @@ def main():
         print("Updates go there instead of to us. Remove it with deleteWebhook first.\n")
 
     remember(token)
+    dressed = dress_up(token)
     link = f"https://t.me/{username}?start={arm_pairing()}"
     print(f"Bot is alive: @{username}\n")
+    if dressed:
+        print(f"Set for you, no BotFather needed: {', '.join(dressed)}.\n")
     print(f"Open {link} and press Start.")
     print("The link carries a one-off code and stops working in 15 minutes, so")
     print("only whoever opens it becomes the chat cctab writes to.\n")

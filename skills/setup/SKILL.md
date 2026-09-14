@@ -5,38 +5,39 @@ description: Use when connecting cctab to Telegram for the first time, or when t
 
 # Connecting cctab
 
-Four steps, one at a time, waiting for the user between each.
+Three steps, one at a time, waiting for the user between each.
 
-## 1. Username
+## 1. The link
 
-Run `${CLAUDE_PLUGIN_ROOT}/scripts/setup.py` with no arguments. It prints three
-lines for @BotFather, including a generated username that is almost certainly
-free. Show them exactly as printed.
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/setup.py` with no arguments. It prints a
+`t.me/newbot/...` link and a QR code, then waits. Show them exactly as printed
+and say they can scan the QR with their phone instead of opening the link.
 
-The generated name is the point: people lose minutes to "this username is
-already taken", so never ask them to invent one.
+What they see: a window with the bot's username and name already filled in, and
+one button to confirm. No @BotFather, no token to copy. The script picks the
+token up by itself and moves on to step 2.
 
-## 2. Token
-
-BotFather replies with something like `8123456789:AAF...`. Take it on stdin, not
-as an argument, since an argument shows up in `ps` and shell history:
+If nothing comes back, the script says so and falls back to the old way: three
+lines for @BotFather and a generated username that is almost certainly free.
+Take the token on stdin, never as an argument, since an argument shows up in
+`ps` and in shell history:
 
 ```
 echo "<token>" | ${CLAUDE_PLUGIN_ROOT}/scripts/setup.py -
 ```
 
-It checks the shape, checks the token against Telegram, warns about a webhook
-that would eat our updates, and prints a link plus a QR code if the qrcode
-library is installed.
+If Telegram refuses the token, say so and go back. Do not guess why.
 
-If Telegram refuses it, say so and go back to step 1. Do not guess why.
+## 2. Pairing
 
-## 3. Pairing
+The script prints a second link, this one with a one-off code that expires in
+fifteen minutes, plus its own QR. They open it and press Start. Only that link
+pairs the chat, so a stranger writing to the bot cannot take it over.
 
-They open the link and press Start. Their first message tells cctab which chat
-to write to.
+It also sets the bot's name, description, commands and picture along the way,
+so none of that needs @BotFather either.
 
-## 4. After
+## 3. After
 
 It works already: the token is in `~/.cctab/config.json`. Pasting it into the
 plugin's `bot_token` setting moves it to the keychain. Not urgent.
