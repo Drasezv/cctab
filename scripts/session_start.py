@@ -3,7 +3,7 @@
 import json
 import os
 
-DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
+DATA = os.path.expanduser("~/.cctab")
 
 
 def option(name):

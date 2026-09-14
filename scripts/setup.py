@@ -13,7 +13,7 @@ import urllib.request
 os.umask(0o077)
 
 TELEGRAM_API = "https://api.telegram.org/bot"
-DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
+DATA = os.path.expanduser("~/.cctab")
 
 
 # имя занято почти всегда, поэтому генерим с хвостом

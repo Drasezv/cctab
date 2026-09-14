@@ -7,7 +7,7 @@ import sys
 import time
 
 os.umask(0o077)
-DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser("~/.cctab")
+DATA = os.path.expanduser("~/.cctab")
 CACHE = os.path.join(DATA, "limits.json")
 
 

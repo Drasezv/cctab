@@ -19,7 +19,9 @@ if os.environ.get("CC_TG_NOTIFY_CHILD"):
 
 os.umask(0o077)
 HOME = os.path.expanduser("~")
-DATA = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.join(HOME, ".cctab")
+# one place for every process: hooks get CLAUDE_PLUGIN_DATA, but the
+# statusline and anything Claude runs do not, so they would never meet
+DATA = os.path.join(HOME, ".cctab")
 STATE_FILE = os.path.join(DATA, "state.json")
 STATE_LOCK = os.path.join(DATA, "state.lock")
 LOG_FILE = os.path.join(DATA, "cctab.log")
