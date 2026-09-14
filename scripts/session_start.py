@@ -28,8 +28,8 @@ def paired():
 def main():
     if not option("bot_token"):
         print("cctab is installed but has no Telegram bot yet, so no notification "
-              "can arrive. If the user brings up notifications, or wonders why a "
-              "finished task sent nothing, offer the cctab setup skill.")
+              "can arrive. If the user types cctab, brings up notifications, or "
+              "wonders why a finished task sent nothing, run the cctab setup skill.")
     elif not (option("chat_id") or paired()):
         print("cctab has a bot token, but nobody has opened its pairing link yet, "
               "so it has no chat to write to. The cctab setup skill prints the "

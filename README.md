@@ -58,20 +58,35 @@ already put there.
 
 ## Install
 
+In the terminal version of Claude Code:
+
 ```
 /plugin marketplace add drasezv/cctab
-/plugin install cctab
+/plugin install cctab@cctab
 ```
 
-Claude sees there is no bot yet and offers to connect one, so you do not have to
-ask. It gives you a bot username nobody has taken, the lines for @BotFather, and
-takes the token back. Then open the link it prints, or scan the QR code with your
-phone, and press Start. About forty seconds.
+The VS Code extension has no `/plugin`, so run the same thing from a terminal:
 
-The token goes to `~/.cctab/config.json`, readable only by you. Paste it into
-the plugin's `bot_token` setting to move it into the keychain.
+```
+claude plugin marketplace add drasezv/cctab
+claude plugin install cctab@cctab
+```
 
-Hooks are read at startup, so restart Claude Code once after installing.
+Restart Claude Code once, since hooks are only read at startup. Then type:
+
+```
+cctab
+```
+
+That is the whole instruction. Claude walks you through the rest.
+
+Connecting is a link, or a QR code if you would rather scan it with your phone.
+Telegram opens a window with the bot's name and username filled in; confirm it.
+No @BotFather and no token to copy: cctab picks the token up, sets the bot's
+name, description, commands and picture, and gives you one more link. Open it,
+press Start, done.
+
+The token goes to `~/.cctab/config.json`, readable only by you.
 
 ## The rest of the messages
 

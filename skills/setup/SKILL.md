@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Use when connecting cctab to Telegram for the first time, or when the user says notifications are not arriving and the bot may not be paired yet.
+description: Use when the user types just "cctab", asks about cctab, wants to connect cctab to Telegram, or says notifications are not arriving and the bot may not be paired yet.
 ---
 
 # Connecting cctab
