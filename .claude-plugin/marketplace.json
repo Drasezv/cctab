@@ -9,7 +9,7 @@
       "name": "cctab",
       "source": "./",
       "description": "Telegram push when a long Claude Code task finishes, carrying what it cost and how much of your rate limit it burned. Approve permission prompts with two buttons. Tune it from your phone.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "Drasezv"
       },
