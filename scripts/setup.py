@@ -83,19 +83,19 @@ def managed_link(code):
 
 
 def claim(code, until):
-    """(token, why): why is empty, 'expired' or 'unreachable'"""
+    """(token, owner, why): why is empty, 'expired' or 'unreachable'"""
     while time.time() < until:
         try:
             with urllib.request.urlopen(CLAIM + code, timeout=10) as r:
                 body = json.loads(r.read())
             if body.get("token"):
-                return body["token"], ""
+                return body["token"], str(body.get("owner") or ""), ""
         except urllib.error.HTTPError:
             pass                         # 404 until they confirm the window
         except Exception:
-            return "", "unreachable"
+            return "", "", "unreachable"
         time.sleep(3)
-    return "", "expired"
+    return "", "", "expired"
 
 
 AVATAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "avatar.jpg")
@@ -211,7 +211,7 @@ def save_chat(chat, lang):
     os.chmod(path, 0o600)
 
 
-def wait_for_start(token, nonce, until):
+def wait_for_start(token, nonce, until, owner=""):
     """no offset, so the hook still sees these updates afterwards"""
     while time.time() < until:
         try:
@@ -221,7 +221,11 @@ def wait_for_start(token, nonce, until):
             body = {}
         for update in body.get("result", []):
             message = update.get("message") or {}
-            if (message.get("text") or "").strip() != f"/start {nonce}":
+            sender = str((message.get("from") or {}).get("id") or "")
+            if owner:
+                if sender != owner:
+                    continue             # only the person who created the bot
+            elif (message.get("text") or "").strip() != f"/start {nonce}":
                 continue
             chat = (message.get("chat") or {}).get("id")
             lang = (message.get("from") or {}).get("language_code") or ""
@@ -327,7 +331,7 @@ def pair_link(token, username, want_qr):
             print(f"QR {path}")
 
 
-def finish(token, want_qr):
+def finish(token, want_qr, link=True):
     """a token in hand: check it, dress the bot, hand out the Start link"""
     problem = looks_like_a_token(token)
     if problem:
@@ -347,7 +351,8 @@ def finish(token, want_qr):
     dressed = dress_up(token)
     if dressed:
         print(f"DRESSED {', '.join(dressed)}")
-    pair_link(token, username, want_qr)
+    if link:
+        pair_link(token, username, want_qr)
     return 0
 
 
@@ -372,7 +377,8 @@ def main():
                 paired = bool(json.load(f).get("chat_id"))
         except Exception:
             paired = False
-        print(f"READY @{username}" if paired else f"NOT_PAIRED @{username}")
+        how = "owner" if config().get("owner_id") else "link"
+        print(f"READY @{username}" if paired else f"NOT_PAIRED @{username} {how}")
         return 0
 
     if step == "link":
@@ -394,14 +400,27 @@ def main():
         if not cfg.get("create_code"):
             print("NO_LINK run setup.py link first")
             return 1
-        token, why = claim(cfg["create_code"], float(cfg.get("create_until", 0)))
+        token, owner, why = claim(cfg["create_code"], float(cfg.get("create_until", 0)))
         if why == "expired":
             print("EXPIRED nobody confirmed the window within 3 minutes")
             return 2
         if why == "unreachable":
             print_botfather()
             return 3
-        return finish(token, want_qr)
+        if not owner:
+            return finish(token, want_qr)       # older manager: fall back to a Start link
+        failed = finish(token, want_qr, link=False)
+        if failed:
+            return failed
+        cfg = config()
+        cfg["owner_id"] = owner
+        save_config(cfg)
+        # Telegram opens the new bot's chat by itself, their Start there is the last step
+        if not wait_for_start(token, "", time.time() + PAIRING_TTL, owner=owner):
+            print("EXPIRED nobody pressed Start within 3 minutes")
+            return 2
+        print("CONNECTED")
+        return 0
 
     if step == "relink":
         token = config().get("bot_token")
@@ -414,11 +433,13 @@ def main():
 
     if step == "pair":
         cfg = config()
-        if not cfg.get("bot_token") or not cfg.get("pair_nonce"):
+        owner = cfg.get("owner_id", "")
+        if not cfg.get("bot_token") or not (owner or cfg.get("pair_nonce")):
             print("NO_BOT run setup.py wait first")
             return 1
-        if not wait_for_start(cfg["bot_token"], cfg["pair_nonce"],
-                              float(cfg.get("pair_until", 0))):
+        # with the owner known a plain Start is enough, and the clock starts now
+        until = time.time() + PAIRING_TTL if owner else float(cfg.get("pair_until", 0))
+        if not wait_for_start(cfg["bot_token"], cfg.get("pair_nonce", ""), until, owner=owner):
             print("EXPIRED nobody pressed Start within 3 minutes")
             return 2
         print("CONNECTED")

@@ -6,13 +6,13 @@ description: Use when the user types just "cctab", asks about cctab, wants to co
 # Connecting cctab
 
 The script is `${CLAUDE_PLUGIN_ROOT}/scripts/setup.py`. Every step prints one
-keyword first (`LINK`, `BOT`, `PAIR`, `CONNECTED`, `EXPIRED`...) so you know
-what happened without guessing.
+keyword first (`LINK`, `BOT`, `CONNECTED`, `EXPIRED`...) so you know what
+happened without guessing.
 
-**The one rule that matters.** From the moment you hand out a link until the
-user is connected, never end your turn and never run anything in the
-background. Show the link in a message, then in the same turn run the waiting
-step in the foreground with a Bash timeout of 240000. Between turns you see
+**The one rule that matters.** Once you hand out a link, never end your turn
+and never run anything in the background until you have `CONNECTED` or
+`EXPIRED`. Show the link in a message, then in the same turn run the waiting
+step in the foreground with a Bash timeout of 420000. Between turns you see
 nothing: if you stop, the user presses the button and gets silence.
 
 Always write links as a bare URL on their own line. Inside a code block they
@@ -23,49 +23,47 @@ cannot be clicked.
 Run `setup.py status`.
 
 - `READY @name`: already connected. Say so, mention `/settings` in the bot, stop.
-- `NOT_PAIRED @name`: the bot exists but no chat. Go to step 3 with `relink`.
-- `NO_BOT`: ask one question and end your turn: link, or a QR code to scan with
-  the phone?
+- `NOT_PAIRED @name owner`: the bot exists, nobody pressed Start. Tell them to
+  open @name in Telegram and press Start, then same turn run `setup.py pair`.
+- `NOT_PAIRED @name link`: run `setup.py relink` and go to "Start link" below.
+- `NO_BOT`: ask one question and end your turn: a link, or a QR code to scan
+  with the phone?
 
-## 1. Create the bot
+## 1. Create and connect
 
 Run `setup.py link`, or `setup.py link --qr` if they chose the QR. It prints
 `LINK <url>`, and with `--qr` also `QR <path>`: the picture is already open on
 their screen.
 
-Send a message with the link as a bare URL and one line: Telegram opens a window
-with the name and username filled in, confirm it, the link works for 3 minutes.
-If they chose the QR, say the code is open on the screen.
+Send one message: the link as a bare URL (and that the QR is on the screen, if
+they chose it), then two short lines. Confirm the window Telegram opens, the
+name and username are already filled in. Then press Start in the bot chat that
+opens right after. Nothing else is needed.
 
-Then, same turn, run `setup.py wait` (add `--qr` if they chose it).
+Then, same turn, run `setup.py wait`. It waits up to 3 minutes for the window,
+dresses the bot, then waits up to 3 more for Start.
 
 ## 2. What `wait` prints
 
-- `BOT @name`, `DRESSED ...`, `PAIR <url>`: the bot exists with its name,
-  description, commands and picture. Go to step 3.
-- `EXPIRED`: nobody confirmed within 3 minutes. Say the link ran out and that
+- `BOT @name`, `DRESSED ...`, `CONNECTED`: done. A welcome message is already in
+  their Telegram. Nothing arrives until a task runs past 30 minutes; `/settings`
+  in the bot changes that, `/spend` shows the cost per tab.
+- `BOT ...` then `EXPIRED`: the bot exists but Start was not pressed. Tell them
+  to press Start in @name, then run `setup.py pair`.
+- `EXPIRED` alone: nobody confirmed the window. Say the link ran out and that
   typing cctab again gives a fresh one. Stop.
+- `PAIR <url>`: an older path that needs a Start link. Go to "Start link".
 - `UNREACHABLE` followed by three lines for @BotFather: the manager did not
   answer. Show those lines. When they send the token, pass it on stdin, never as
   an argument, since an argument shows up in `ps` and shell history:
-  `echo "<token>" | setup.py -`. It prints the same `BOT` and `PAIR` lines.
+  `echo "<token>" | setup.py -`. It prints `BOT` and `PAIR`; go to "Start link".
 - `BAD_TOKEN`: say what it says, do not guess why.
 
-## 3. Pair the chat
+## Start link
 
-If you came from `NOT_PAIRED`, first run `setup.py relink` (with `--qr` if
-wanted) to get a `PAIR <url>`.
-
-Send the `PAIR` link as a bare URL: open it and press Start, 3 minutes. Only
-this link pairs the chat, so a stranger writing to the bot cannot take it over.
-
-Then, same turn, run `setup.py pair`.
-
-- `CONNECTED`: a welcome message is already in their Telegram. Tell them it is
-  done and that nothing comes until a task runs past 30 minutes; `/settings` in
-  the bot changes that, `/spend` shows the cost per tab.
-- `EXPIRED`: Start was not pressed in time. Run `relink`, send the new link, run
-  `pair` again.
+Only for `PAIR <url>`. Send it as a bare URL: open it and press Start, 3
+minutes. Then same turn run `setup.py pair`. `CONNECTED` means done;
+`EXPIRED` means run `relink` and try once more.
 
 ## After
 
