@@ -86,6 +86,11 @@ That is the last thing you do. No @BotFather, no token to copy, no Start: cctab
 picks the token up, sets the bot's name, description, commands and picture, and
 the bot writes to you on its own.
 
+After that it stays quiet until a task runs past thirty minutes, so silence is
+normal; `/settings` in the bot lowers that. In the VS Code extension the rate
+limit numbers need `use_usage_api`, see [Rate limits](#rate-limits). If the link ever fails,
+Claude falls back to the old way through @BotFather.
+
 The token goes to `~/.cctab/config.json`, readable only by you.
 
 ## The rest of the messages
