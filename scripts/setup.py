@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 import urllib.error
@@ -21,36 +22,15 @@ def suggest():
     return f"cctab_{secrets.token_hex(3)}_bot"
 
 
-def qr(text):
-    try:
-        import qrcode
-    except ImportError:
-        return ""
-    code = qrcode.QRCode(border=1)
-    code.add_data(text)
-    code.make(fit=True)
-    grid = code.get_matrix()
-    lines = []
-    for y in range(0, len(grid), 2):
-        row = ""
-        for x in range(len(grid[y])):
-            top = grid[y][x]
-            bottom = grid[y + 1][x] if y + 1 < len(grid) else False
-            row += {(True, True): " ", (True, False): "▄",
-                    (False, True): "▀", (False, False): "█"}[(top, bottom)]
-        lines.append(row)
-    return "\n".join(lines)
-
-
 TOKEN_SHAPE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
 
 
 def looks_like_a_token(token):
     """cheap sanity check before hitting telegram"""
     if ":" not in token:
-        return "that has no colon in it — copy the whole line BotFather sent"
+        return "that has no colon in it, copy the whole line BotFather sent"
     if any(ch.isspace() for ch in token):
-        return "there is a space in there — copy it again without breaks"
+        return "there is a space in there, copy it again without breaks"
     if not TOKEN_SHAPE.match(token):
         return "that is not the shape of a token (digits, a colon, then letters)"
     return ""
@@ -102,21 +82,20 @@ def managed_link(code):
     return f"https://t.me/newbot/{MANAGER}/cctab_{code}_bot?name=cctab"
 
 
-def claim(code, seconds=180):
-    """our side of the handover: the manager leaves the token under the code"""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
+def claim(code, until):
+    """(token, why): why is empty, 'expired' or 'unreachable'"""
+    while time.time() < until:
         try:
             with urllib.request.urlopen(CLAIM + code, timeout=10) as r:
                 body = json.loads(r.read())
             if body.get("token"):
-                return body["token"]
+                return body["token"], ""
         except urllib.error.HTTPError:
-            pass                         # 404 until they finish the window
+            pass                         # 404 until they confirm the window
         except Exception:
-            return ""                    # nothing listening, take the long way
+            return "", "unreachable"
         time.sleep(3)
-    return ""
+    return "", "expired"
 
 
 AVATAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "avatar.jpg")
@@ -175,7 +154,94 @@ def dress_up(token):
     return done
 
 
-PAIRING_TTL = 900        # ссылка живёт столько же, сколько окно установки
+CREATE_TTL = 180         # обе ссылки живут три минуты, дальше пишем, что истекли
+PAIRING_TTL = 180
+GREETING = ("cctab is connected. I'll write here when a Claude Code task runs "
+            "past 30 minutes, with what it cost. /settings changes that.")
+GREETING_RU = ("cctab подключён. Напишу сюда, когда задача в Claude Code идёт "
+               "дольше 30 минут, и сколько она стоила. /settings, чтобы поменять.")
+
+
+def config():
+    try:
+        with open(os.path.join(DATA, "config.json")) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_config(cfg):
+    os.makedirs(DATA, mode=0o700, exist_ok=True)
+    path = os.path.join(DATA, "config.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f)
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+
+
+def save_qr(text, name):
+    """png next to the config, opened on a mac so there is nothing to find"""
+    try:
+        import qrcode
+    except ImportError:
+        return ""
+    os.makedirs(DATA, mode=0o700, exist_ok=True)
+    path = os.path.join(DATA, name)
+    qrcode.make(text).save(path)
+    if sys.platform == "darwin":
+        subprocess.run(["open", path], check=False)
+    return path
+
+
+def save_chat(chat, lang):
+    path = os.path.join(DATA, "state.json")
+    try:
+        with open(path) as f:
+            st = json.load(f)
+    except Exception:
+        st = {}
+    st["chat_id"] = str(chat)
+    if lang:
+        st["tg_lang"] = lang
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+
+
+def wait_for_start(token, nonce, until):
+    """no offset, so the hook still sees these updates afterwards"""
+    while time.time() < until:
+        try:
+            body = json.loads(urllib.request.urlopen(
+                f"{TELEGRAM_API}{token}/getUpdates?limit=100&timeout=0", timeout=10).read())
+        except Exception:
+            body = {}
+        for update in body.get("result", []):
+            message = update.get("message") or {}
+            if (message.get("text") or "").strip() != f"/start {nonce}":
+                continue
+            chat = (message.get("chat") or {}).get("id")
+            lang = (message.get("from") or {}).get("language_code") or ""
+            save_chat(chat, lang)
+            call(token, "sendMessage", {
+                "chat_id": chat,
+                "text": GREETING_RU if lang.startswith("ru") else GREETING})
+            return chat
+        time.sleep(2)
+    return ""
+
+
+def print_botfather():
+    print("UNREACHABLE the manager did not answer, so here is the long way.")
+    print("Open @BotFather and send these three, one after another:\n")
+    print("  /newbot")
+    print("  cctab notifications")
+    print(f"  {suggest()}\n")
+    print("It replies with a token. Pass it on stdin:")
+    print('  echo "<token>" | setup.py -')
 
 
 def arm_pairing():
@@ -252,72 +318,117 @@ def wire_statusline(wrapper_path):
             if existing else "wired")
 
 
-def main():
-    if "--statusline" in sys.argv:
-        where = sys.argv[sys.argv.index("--statusline") + 1] \
-            if len(sys.argv) > sys.argv.index("--statusline") + 1 else WRAPPER
-        print(wire_statusline(where))
-        return
-    token = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-    if token == "-":
-        # an argument is visible in `ps` and lands in the shell history
-        token = sys.stdin.readline().strip()
-    if not token:
-        code = secrets.token_hex(3)
-        link = managed_link(code)
-        print("Open this, or scan it with your phone, and confirm the window:\n")
-        print(f"  {link}\n")
-        art = qr(link)
-        if art:
-            print(art)
-        print("The name and the username are filled in already. Waiting for it...")
-        token = claim(code)
-    if not token:
-        name = suggest()
-        print("\nNothing came back, so here is the long way.")
-        print("Open @BotFather and send these three, one after another:\n")
-        print("  /newbot")
-        print("  cctab notifications")
-        print(f"  {name}\n")
-        print("It replies with a token. Run this again with the token to finish:")
-        print("  setup.py <token>")
-        return
+def pair_link(token, username, want_qr):
+    link = f"https://t.me/{username}?start={arm_pairing()}"
+    print(f"PAIR {link}")
+    if want_qr:
+        path = save_qr(link, "pair.png")
+        if path:
+            print(f"QR {path}")
 
+
+def finish(token, want_qr):
+    """a token in hand: check it, dress the bot, hand out the Start link"""
     problem = looks_like_a_token(token)
     if problem:
-        print(f"That token will not do: {problem}")
-        return
-
+        print(f"BAD_TOKEN {problem}")
+        return 1
     username, problem = whoami(token)
     if problem:
         if "401" in problem:
-            problem = "Telegram does not know it — check you pasted the newest one"
-        print(f"Telegram would not take that token: {problem}")
-        return
+            problem = "Telegram does not know it, check you pasted the newest one"
+        print(f"BAD_TOKEN {problem}")
+        return 1
     hooked = webhook_blocks_us(token)
     if hooked:
-        print(f"Heads up: this bot has a webhook at {hooked}")
-        print("Updates go there instead of to us. Remove it with deleteWebhook first.\n")
-
+        print(f"WEBHOOK {hooked} eats our updates, remove it with deleteWebhook")
     remember(token)
+    print(f"BOT @{username}")
     dressed = dress_up(token)
-    link = f"https://t.me/{username}?start={arm_pairing()}"
-    print(f"Bot is alive: @{username}\n")
     if dressed:
-        print(f"Set for you, no BotFather needed: {', '.join(dressed)}.\n")
-    print(f"Open {link} and press Start.")
-    print("The link carries a one-off code and stops working in 15 minutes, so")
-    print("only whoever opens it becomes the chat cctab writes to.\n")
-    art = qr(link)
-    if art:
-        print(art)
-    print("Token saved, so this already works. To keep it in your system keychain")
-    print("instead of a file, paste it into the plugin's bot_token setting.\n")
-    print("One more thing, for the rate-limit numbers:")
-    print("  setup.py --statusline")
-    print("It puts cctab in the statusline slot — the only place Claude Code")
-    print("hands limits to — and keeps your own statusline running after it.")
+        print(f"DRESSED {', '.join(dressed)}")
+    pair_link(token, username, want_qr)
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    want_qr = "--qr" in args
+    args = [a for a in args if a != "--qr"]
+    step = args[0] if args else "status"
+
+    if step == "--statusline":
+        print(wire_statusline(args[1] if len(args) > 1 else WRAPPER))
+        return 0
+
+    if step == "status":
+        token = config().get("bot_token")
+        username, problem = whoami(token) if token else ("", "none")
+        if problem:
+            print("NO_BOT")
+            return 0
+        try:
+            with open(os.path.join(DATA, "state.json")) as f:
+                paired = bool(json.load(f).get("chat_id"))
+        except Exception:
+            paired = False
+        print(f"READY @{username}" if paired else f"NOT_PAIRED @{username}")
+        return 0
+
+    if step == "link":
+        code = secrets.token_hex(3)
+        cfg = config()
+        cfg["create_code"] = code
+        cfg["create_until"] = int(time.time()) + CREATE_TTL
+        save_config(cfg)
+        link = managed_link(code)
+        print(f"LINK {link}")
+        if want_qr:
+            path = save_qr(link, "create.png")
+            if path:
+                print(f"QR {path}")
+        return 0
+
+    if step == "wait":
+        cfg = config()
+        if not cfg.get("create_code"):
+            print("NO_LINK run setup.py link first")
+            return 1
+        token, why = claim(cfg["create_code"], float(cfg.get("create_until", 0)))
+        if why == "expired":
+            print("EXPIRED nobody confirmed the window within 3 minutes")
+            return 2
+        if why == "unreachable":
+            print_botfather()
+            return 3
+        return finish(token, want_qr)
+
+    if step == "relink":
+        token = config().get("bot_token")
+        username, problem = whoami(token) if token else ("", "none")
+        if problem:
+            print("NO_BOT")
+            return 1
+        pair_link(token, username, want_qr)
+        return 0
+
+    if step == "pair":
+        cfg = config()
+        if not cfg.get("bot_token") or not cfg.get("pair_nonce"):
+            print("NO_BOT run setup.py wait first")
+            return 1
+        if not wait_for_start(cfg["bot_token"], cfg["pair_nonce"],
+                              float(cfg.get("pair_until", 0))):
+            print("EXPIRED nobody pressed Start within 3 minutes")
+            return 2
+        print("CONNECTED")
+        return 0
+
+    if step == "-":
+        # an argument is visible in `ps` and lands in the shell history
+        return finish(sys.stdin.readline().strip(), want_qr)
+    return finish(step, want_qr)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
