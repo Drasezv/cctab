@@ -71,6 +71,30 @@ class Money(Base):
         self.assertAlmostEqual(full, 5.0, places=6)
         self.assertAlmostEqual(cached, 0.5, places=6)
 
+    def test_cache_write_ttl(self):
+        five = {"cache_creation_input_tokens": 1_000_000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 1_000_000}}
+        hour = {"cache_creation_input_tokens": 1_000_000,
+                "cache_creation": {"ephemeral_1h_input_tokens": 1_000_000}}
+        old = {"cache_creation_input_tokens": 1_000_000}
+        self.assertAlmostEqual(self.m.cost(five, "claude-opus-5"), 6.25, places=6)
+        self.assertAlmostEqual(self.m.cost(hour, "claude-opus-5"), 10.0, places=6)
+        self.assertAlmostEqual(self.m.cost(old, "claude-opus-5"), 6.25, places=6)
+
+    def test_session_counts_subagents(self):
+        def row(rid):
+            return {"type": "assistant", "requestId": rid,
+                    "timestamp": "2026-09-22T10:00:00Z",
+                    "message": {"model": "claude-opus-5",
+                                "usage": {"output_tokens": 1_000_000}}}
+        path = self.transcript([row("a")])
+        sub = os.path.join(path[:-6], "subagents")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "agent-x.jsonl"), "w") as f:
+            f.write(json.dumps(row("b")) + "\n")
+        got = self.m.scan_session(path)
+        self.assertAlmostEqual(got["cost"], 50.0, places=6)
+
     def test_billable_skips_cache(self):
         turn = {"input_tokens": 10, "output_tokens": 20,
                 "cache_creation_input_tokens": 30, "cache_read_input_tokens": 9000}

@@ -363,6 +363,13 @@ def price_for(model_id):
     return FALLBACK_PRICE
 
 
+def subagent_paths(path):
+    """subagents write their own transcripts next to the session"""
+    if not path.endswith(".jsonl"):
+        return []
+    return glob.glob(os.path.join(path[:-6], "subagents", "*.jsonl"))
+
+
 def parse(path):
     rows = []
     try:
@@ -461,8 +468,12 @@ def tally(rows, since):
 
 def cost(t, model_id):
     pin, pout = price_for(model_id)
+    # 1h cache writes cost 2x, 5m ones 1.25x. old transcripts have no split
+    hour = (t.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0
+    five = t.get("cache_creation_input_tokens", 0) - hour
     return (t.get("input_tokens", 0) * pin
-            + t.get("cache_creation_input_tokens", 0) * pin * 1.25
+            + five * pin * 1.25
+            + hour * pin * 2
             + t.get("cache_read_input_tokens", 0) * pin * 0.1
             + t.get("output_tokens", 0) * pout) / 1_000_000
 
@@ -648,7 +659,9 @@ def window_cost(reset_iso, hours):
         return 0.0
     start = reset - timedelta(hours=hours)
     seen, total = set(), 0.0
-    for path in glob.glob(os.path.join(PROJECTS_ROOT, "*", "*.jsonl")):
+    paths = (glob.glob(os.path.join(PROJECTS_ROOT, "*", "*.jsonl"))
+             + glob.glob(os.path.join(PROJECTS_ROOT, "*", "*", "subagents", "*.jsonl")))
+    for path in paths:
         try:
             if datetime.fromtimestamp(os.path.getmtime(path), timezone.utc) < start:
                 continue
@@ -933,36 +946,39 @@ TITLE_RE = re.compile(r'"aiTitle":\s*"((?:[^"\\]|\\.)*)"')
 def scan_session(path):
     """one transcript: title, tokens, cost"""
     seen, tokens, spent, title, first, last = set(), 0, 0.0, "", None, None
-    try:
-        handle = open(path, encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    with handle as f:
-        for line in f:
-            if '"aiTitle"' in line:
-                found = TITLE_RE.search(line)
-                if found:
-                    try:
-                        title = json.loads('"' + found.group(1) + '"')
-                    except ValueError:
-                        title = found.group(1)
-            if '"usage"' not in line:
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            stamp = row.get("timestamp")
-            if stamp:
-                first = stamp if first is None or stamp < first else first
-                last = stamp if last is None or stamp > last else last
-            msg = row.get("message") or {}
-            usage, rid = msg.get("usage"), row.get("requestId") or row.get("uuid")
-            if not usage or not rid or rid in seen:
-                continue
-            seen.add(rid)
-            tokens += billable(usage)
-            spent += cost(usage, msg.get("model"))
+    for one in [path] + subagent_paths(path):
+        try:
+            handle = open(one, encoding="utf-8", errors="replace")
+        except OSError:
+            if one == path:
+                return None
+            continue
+        with handle as f:
+            for line in f:
+                if one == path and '"aiTitle"' in line:
+                    found = TITLE_RE.search(line)
+                    if found:
+                        try:
+                            title = json.loads('"' + found.group(1) + '"')
+                        except ValueError:
+                            title = found.group(1)
+                if '"usage"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                stamp = row.get("timestamp")
+                if stamp:
+                    first = stamp if first is None or stamp < first else first
+                    last = stamp if last is None or stamp > last else last
+                msg = row.get("message") or {}
+                usage, rid = msg.get("usage"), row.get("requestId") or row.get("uuid")
+                if not usage or not rid or rid in seen:
+                    continue
+                seen.add(rid)
+                tokens += billable(usage)
+                spent += cost(usage, msg.get("model"))
     if not tokens:
         return None
     return {"name": title or "untitled", "tokens": tokens, "cost": spent,
@@ -1374,6 +1390,8 @@ def on_stop(data):
     rows = parse(path)
     text, since = last_request(rows)
     tal = tally(rows, since)
+    for sub in subagent_paths(path):
+        tal["turn_cost"] += tally(parse(sub), since)["turn_cost"]
     ctx = title_context(rows)
 
     elapsed = 0
