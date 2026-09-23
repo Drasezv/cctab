@@ -71,6 +71,21 @@ class Money(Base):
         self.assertAlmostEqual(full, 5.0, places=6)
         self.assertAlmostEqual(cached, 0.5, places=6)
 
+    def test_cache_read_multipliers(self):
+        read = {"cache_read_input_tokens": 1_000_000}
+        # fable 5.1 reads are 0.025x of $10, opus 5.5 0.05x of $4
+        self.assertAlmostEqual(self.m.cost(read, "claude-fable-5-1"), 0.25, places=6)
+        self.assertAlmostEqual(self.m.cost(read, "claude-opus-5-5"), 0.20, places=6)
+        self.assertAlmostEqual(self.m.cost(read, "claude-opus-5"), 0.50, places=6)
+
+    def test_opus_55_price(self):
+        self.assertAlmostEqual(
+            self.m.cost({"input_tokens": 1_000_000}, "claude-opus-5-5"), 4.0, places=6)
+        self.assertAlmostEqual(
+            self.m.cost({"output_tokens": 1_000_000}, "claude-opus-5-5"), 20.0, places=6)
+        self.assertAlmostEqual(
+            self.m.cost({"input_tokens": 1_000_000}, "claude-opus-5"), 5.0, places=6)
+
     def test_cache_write_ttl(self):
         five = {"cache_creation_input_tokens": 1_000_000,
                 "cache_creation": {"ephemeral_5m_input_tokens": 1_000_000}}

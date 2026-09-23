@@ -78,6 +78,7 @@ TELEGRAM_API = "https://api.telegram.org/bot"
 # Dollars per million tokens, as published by Anthropic.
 PRICES = {
     "claude-fable-5-1": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-mythos-5-1": (10.0, 50.0),
     "claude-fable-5": (10.0, 50.0),
     "claude-opus-5": (5.0, 25.0),
@@ -102,6 +103,14 @@ PRICES = {
 
 # Rates for anything not in the table.
 FALLBACK_PRICE = (5.0, 25.0)
+
+# Cache hits cost 0.1x input everywhere except these.
+READ_MULT = {
+    "claude-fable-5-1": 0.025,
+    "claude-mythos-5-1": 0.025,
+    "claude-opus-5-5": 0.05,
+}
+DEFAULT_READ_MULT = 0.1
 
 TITLE_PROMPT = (
     "Below is how a working session began. Name the thing being worked on. "
@@ -345,15 +354,29 @@ UNPRICED = set()
 
 
 # цены сверять с docs.claude.com/en/docs/about-claude/pricing
-def price_for(model_id):
-    """longest id prefix wins, bedrock/vertex prefixes stripped"""
+def plain_name(model_id):
+    """bedrock/vertex prefixes and suffixes stripped"""
     name = (model_id or "").strip()
     for prefix in ("us.anthropic.", "eu.anthropic.", "apac.anthropic.",
                    "global.anthropic.", "anthropic."):
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
-    name = name.split("@")[0].rsplit("-v", 1)[0] if "@" in name or name.endswith(":0") else name
+    return name.split("@")[0].rsplit("-v", 1)[0] if "@" in name or name.endswith(":0") else name
+
+
+def read_mult(model_id):
+    """what a cache hit costs, as a share of input"""
+    name = plain_name(model_id)
+    for key in sorted(READ_MULT, key=len, reverse=True):
+        if name.startswith(key):
+            return READ_MULT[key]
+    return DEFAULT_READ_MULT
+
+
+def price_for(model_id):
+    """longest id prefix wins, bedrock/vertex prefixes stripped"""
+    name = plain_name(model_id)
     for key in sorted(PRICES, key=len, reverse=True):
         if name.startswith(key):
             return PRICES[key]
@@ -474,7 +497,7 @@ def cost(t, model_id):
     return (t.get("input_tokens", 0) * pin
             + five * pin * 1.25
             + hour * pin * 2
-            + t.get("cache_read_input_tokens", 0) * pin * 0.1
+            + t.get("cache_read_input_tokens", 0) * pin * read_mult(model_id)
             + t.get("output_tokens", 0) * pout) / 1_000_000
 
 
