@@ -60,6 +60,24 @@ def chain(raw):
         pass
 
 
+def own_line(payload):
+    """what to show when the user had no statusline of their own"""
+    bits = []
+    name = ((payload.get("model") or {}).get("display_name") or "").strip()
+    if name:
+        bits.append(name)
+    limits = payload.get("rate_limits") or {}
+    for window, label in (("five_hour", "5h"), ("seven_day", "week")):
+        block = limits.get(window)
+        if not isinstance(block, dict):
+            continue
+        try:
+            bits.append(f"{label} {float(block.get('used_percentage')):.0f}%")
+        except (TypeError, ValueError):
+            pass
+    return "  ".join(bits)
+
+
 def main():
     raw = sys.stdin.read()
     try:
@@ -71,7 +89,13 @@ def main():
         store(payload)
     except OSError:
         pass
-    chain(raw)
+    if INNER:
+        chain(raw)
+        return
+    # an empty status bar would look like cctab broke it
+    line = own_line(payload)
+    if line:
+        sys.stdout.write(line)
 
 
 if __name__ == "__main__":
