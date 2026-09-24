@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "src")
 DOCS = os.path.join(os.path.dirname(HERE), "docs")
+DOT = (24, 16, 60, 52)      # status emoji inside the cropped bubble
 SS = 3                      # supersampling, text stays crisp after the downscale
 BONE = (242, 239, 233)
 MUTED = (176, 168, 158)
@@ -49,13 +50,18 @@ def banner(scale=2):
     img = shade(cover(Image.open(f"{SRC}/banner-bg.png").convert("RGB"), W, H), 900 * SS)
     d = ImageDraw.Draw(img)
     # everything sits low and clear of the laptop on the right
-    tracked(d, (86 * SS, 250 * SS), "cctab", font("SFNS.ttf", 116, SS), BONE, tracking=-4, ss=SS)
+    edge = 92 * SS                       # one optical margin for every line
+    wm = font("SFNS.ttf", 116, SS)
+    tracked(d, (edge - wm.getbbox("c")[0] - round(2.2 * SS), 250 * SS),
+            "cctab", wm, BONE, tracking=-4, ss=SS)
     body = font("SFNS.ttf", 27, SS)
     for i, line in enumerate(("Telegram push when a long Claude Code",
                               "task finishes, with its cost and limit used.")):
-        d.text((92 * SS, (418 + i * 40) * SS), line, font=body, fill=MUTED)
-    d.rectangle([92 * SS, 540 * SS, 95 * SS, 572 * SS], fill=CORAL)
-    d.text((114 * SS, 543 * SS), "github.com/Drasezv/cctab", font=font("SFNSMono.ttf", 24, SS), fill=BONE)
+        d.text((edge - body.getbbox(line)[0], (418 + i * 40) * SS), line, font=body, fill=MUTED)
+    mono = font("SFNSMono.ttf", 24, SS)
+    d.rectangle([edge, 540 * SS, edge + 3 * SS, 572 * SS], fill=CORAL)
+    d.text((edge + 22 * SS - mono.getbbox("g")[0], 543 * SS),
+           "github.com/Drasezv/cctab", font=mono, fill=BONE)
     return img.resize((1280 * scale, 640 * scale), Image.LANCZOS)
 
 
@@ -95,20 +101,17 @@ def social():
     card = cover(Image.open(f"{SRC}/social-bg.png").convert("RGB"), *big, anchor="center")
     card = Image.blend(card, Image.new("RGB", big, (13, 12, 12)), 0.45)
 
-    shot = Image.open(f"{DOCS}/task-done.png").convert("RGB")
-    shot = shot.crop((0, 6, shot.width, 525))        # no top strip, no timestamp
-    dot = shot.crop((26, 8, 70, 52))                 # the status emoji, kept readable
+    # the bubble only: no chat background, no timestamp, a breath under the quote
+    shot = Image.open(f"{DOCS}/task-done.png").convert("RGB").crop((6, 4, 832, 535))
+    circle = shot.crop(DOT)
     shot = duotone(shot)
-    shot.paste(Image.blend(shot.crop((26, 8, 70, 52)), dot, 0.5), (26, 8))
+    ring = Image.new("L", (DOT[2] - DOT[0], DOT[3] - DOT[1]), 0)
+    ImageDraw.Draw(ring).ellipse([2, 2, ring.width - 3, ring.height - 3], fill=128)
+    shot.paste(Image.composite(circle, shot.crop(DOT), ring), DOT[:2])
 
-    d = ImageDraw.Draw(card)
     x = (W - shot.width) // 2
-    y = (H - shot.height) // 2 + 6
-    # the wordmark and its line sit together, just above the message
-    wm = font("SFNS.ttf", 46)
-    end_x = tracked(d, (x * SS, (y - 84) * SS), "cctab", wm, BONE, tracking=-2)
-    sub = font("SFNS.ttf", 23)
-    d.text((end_x + 18 * SS, (y - 72) * SS), "one message per finished task", font=sub, fill=MUTED)
+    y = (H - shot.height) // 2 + 10
+    text_x = x + 22                      # line up with the type inside the bubble
 
     glow = Image.new("RGBA", big, (0, 0, 0, 0))
     ImageDraw.Draw(glow).rounded_rectangle(
@@ -121,16 +124,31 @@ def social():
         [x * SS, (y + 18) * SS, (x + shot.width) * SS, (y + shot.height + 34) * SS],
         radius=30 * SS, fill=(0, 0, 0, 210))
     card = Image.alpha_composite(card, shadow.filter(ImageFilter.GaussianBlur(34 * SS)))
+    card = card.convert("RGB").resize((W, H), Image.LANCZOS)
 
-    card = card.convert("RGB").resize((W, H), Image.LANCZOS)   # shrink first, paste pixel for pixel
     mask = Image.new("L", shot.size, 0)
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, shot.width - 1, shot.height - 1], radius=26, fill=255)
     card.paste(shot, (x, y), mask)
 
-    d = ImageDraw.Draw(card)
-    foot = ImageFont.truetype("/System/Library/Fonts/SFNSMono.ttf", 20)
-    d.rectangle([x, y + shot.height + 44, x + 3, y + shot.height + 68], fill=CORAL)
-    d.text((x + 20, y + shot.height + 46), "github.com/Drasezv/cctab", font=foot, fill=(150, 142, 133))
+    # all type on one oversampled layer, so nothing is drawn at final size
+    layer = Image.new("RGBA", big, (0, 0, 0, 0))
+    t = ImageDraw.Draw(layer)
+    wm = font("SFNS.ttf", 46)
+    sub = font("SFNS.ttf", 23)
+    base = (y - 34) * SS                              # shared baseline
+    wm_top = base - wm.getbbox("cctab")[3]
+    end_x = tracked(t, (text_x * SS, wm_top), "cctab", wm, BONE, tracking=-2)
+    t.text((end_x + 18 * SS, base - sub.getbbox("one")[3]),
+           "one message per finished task", font=sub, fill=MUTED)
+
+    foot = font("SFNSMono.ttf", 20)
+    fy = (y + shot.height + 44) * SS
+    t.rectangle([text_x * SS, fy, (text_x + 3) * SS, fy + 25 * SS], fill=CORAL)
+    t.text(((text_x + 20) * SS, fy + 1 * SS), "github.com/Drasezv/cctab",
+           font=foot, fill=(150, 142, 133))
+
+    card = Image.alpha_composite(card.convert("RGBA"),
+                                 layer.resize((W, H), Image.LANCZOS)).convert("RGB")
     return card
 
 
