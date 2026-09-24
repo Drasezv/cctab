@@ -1,3 +1,5 @@
+<img src="assets/banner.png" alt="cctab">
+
 # cctab
 
 Telegram message when a long Claude Code task finishes, with the cost and how
