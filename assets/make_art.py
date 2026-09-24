@@ -141,8 +141,8 @@ def social():
     # all type on one oversampled layer, so nothing is drawn at final size
     layer = Image.new("RGBA", big, (0, 0, 0, 0))
     t = ImageDraw.Draw(layer)
-    wm = font("SFNS.ttf", 62, weight="Semibold")
-    sub = font("SFNS.ttf", 24)
+    wm = font("SFNS.ttf", 62, weight="Medium")
+    sub = font("SFNS.ttf", 26)
     base = (y - 30) * SS                              # shared baseline
     end_x = tracked(t, (x * SS - wm.getbbox("c")[0], base - wm.getbbox("cctab")[3]),
                     "cctab", wm, BONE, tracking=-3)
