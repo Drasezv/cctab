@@ -13,8 +13,11 @@ MUTED = (176, 168, 158)
 CORAL = (217, 119, 87)
 
 
-def font(name, size, ss=None):
-    return ImageFont.truetype(f"/System/Library/Fonts/{name}", size * (ss or SS))
+def font(name, size, ss=None, weight=None):
+    f = ImageFont.truetype(f"/System/Library/Fonts/{name}", size * (ss or SS))
+    if weight:
+        f.set_variation_by_name(weight)
+    return f
 
 
 def tracked(draw, xy, text, fnt, fill, tracking=0, ss=None):
@@ -57,7 +60,8 @@ def banner(scale=2):
     body = font("SFNS.ttf", 27, SS)
     for i, line in enumerate(("Telegram push when a long Claude Code",
                               "task finishes, with its cost and limit used.")):
-        d.text((edge - body.getbbox(line)[0], (418 + i * 40) * SS), line, font=body, fill=MUTED)
+        lean = round(2.5 * SS) if line[0].islower() else 0
+        d.text((edge - body.getbbox(line)[0] + lean, (418 + i * 40) * SS), line, font=body, fill=MUTED)
     mono = font("SFNSMono.ttf", 24, SS)
     d.rectangle([edge, 540 * SS, edge + 3 * SS, 572 * SS], fill=CORAL)
     d.text((edge + 22 * SS - mono.getbbox("g")[0], 543 * SS),
@@ -102,7 +106,11 @@ def social():
     card = Image.blend(card, Image.new("RGB", big, (13, 12, 12)), 0.45)
 
     # the bubble only: no chat background, no timestamp, a breath under the quote
-    shot = Image.open(f"{DOCS}/task-done.png").convert("RGB").crop((6, 4, 832, 535))
+    shot = Image.open(f"{DOCS}/task-done.png").convert("RGB").crop((6, 4, 832, 543))
+    pad = Image.new("RGB", (shot.width, 22), shot.getpixel((shot.width - 6, shot.height - 4)))
+    grown = Image.new("RGB", (shot.width, shot.height + pad.height))
+    grown.paste(shot, (0, 0)); grown.paste(pad, (0, shot.height))
+    shot = grown
     circle = shot.crop(DOT)
     shot = duotone(shot)
     ring = Image.new("L", (DOT[2] - DOT[0], DOT[3] - DOT[1]), 0)
@@ -133,19 +141,19 @@ def social():
     # all type on one oversampled layer, so nothing is drawn at final size
     layer = Image.new("RGBA", big, (0, 0, 0, 0))
     t = ImageDraw.Draw(layer)
-    wm = font("SFNS.ttf", 46)
-    sub = font("SFNS.ttf", 23)
-    base = (y - 34) * SS                              # shared baseline
-    wm_top = base - wm.getbbox("cctab")[3]
-    end_x = tracked(t, (text_x * SS, wm_top), "cctab", wm, BONE, tracking=-2)
-    t.text((end_x + 18 * SS, base - sub.getbbox("one")[3]),
+    wm = font("SFNS.ttf", 62, weight="Semibold")
+    sub = font("SFNS.ttf", 24)
+    base = (y - 30) * SS                              # shared baseline
+    end_x = tracked(t, (x * SS - wm.getbbox("c")[0], base - wm.getbbox("cctab")[3]),
+                    "cctab", wm, BONE, tracking=-3)
+    t.text((end_x + 20 * SS, base - sub.getbbox("one")[3]),
            "one message per finished task", font=sub, fill=MUTED)
 
-    foot = font("SFNSMono.ttf", 20)
-    fy = (y + shot.height + 44) * SS
-    t.rectangle([text_x * SS, fy, (text_x + 3) * SS, fy + 25 * SS], fill=CORAL)
-    t.text(((text_x + 20) * SS, fy + 1 * SS), "github.com/Drasezv/cctab",
-           font=foot, fill=(150, 142, 133))
+    foot = font("SFNSMono.ttf", 24)
+    fy = (y + shot.height + 46) * SS
+    t.rectangle([x * SS, fy, (x + 3) * SS, fy + 32 * SS], fill=CORAL)
+    t.text(((x + 22) * SS - foot.getbbox("g")[0], fy + 3 * SS), "github.com/Drasezv/cctab",
+           font=foot, fill=BONE)
 
     card = Image.alpha_composite(card.convert("RGBA"),
                                  layer.resize((W, H), Image.LANCZOS)).convert("RGB")
