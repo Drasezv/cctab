@@ -12,16 +12,16 @@ MUTED = (176, 168, 158)
 CORAL = (217, 119, 87)
 
 
-def font(name, size):
-    return ImageFont.truetype(f"/System/Library/Fonts/{name}", size * SS)
+def font(name, size, ss=None):
+    return ImageFont.truetype(f"/System/Library/Fonts/{name}", size * (ss or SS))
 
 
-def tracked(draw, xy, text, fnt, fill, tracking=0):
+def tracked(draw, xy, text, fnt, fill, tracking=0, ss=None):
     """draw text letter by letter so the spacing is ours, not the font's"""
     x, y = xy
     for ch in text:
         draw.text((x, y), ch, font=fnt, fill=fill)
-        x += draw.textlength(ch, font=fnt) + tracking * SS
+        x += draw.textlength(ch, font=fnt) + tracking * (ss or SS)
     return x
 
 
@@ -42,19 +42,21 @@ def shade(img, width, strength=225):
     return Image.composite(black, img, grad.resize(img.size))
 
 
-def banner():
+def banner(scale=2):
+    """rendered at 2x so it stays sharp on retina and in the readme"""
+    SS = 4
     W, H = 1280 * SS, 640 * SS
     img = shade(cover(Image.open(f"{SRC}/banner-bg.png").convert("RGB"), W, H), 900 * SS)
     d = ImageDraw.Draw(img)
     # everything sits low and clear of the laptop on the right
-    tracked(d, (86 * SS, 250 * SS), "cctab", font("SFNS.ttf", 116), BONE, tracking=-4)
-    body = font("SFNS.ttf", 27)
+    tracked(d, (86 * SS, 250 * SS), "cctab", font("SFNS.ttf", 116, SS), BONE, tracking=-4, ss=SS)
+    body = font("SFNS.ttf", 27, SS)
     for i, line in enumerate(("Telegram push when a long Claude Code",
                               "task finishes, with its cost and limit used.")):
         d.text((92 * SS, (418 + i * 40) * SS), line, font=body, fill=MUTED)
     d.rectangle([92 * SS, 540 * SS, 95 * SS, 572 * SS], fill=CORAL)
-    d.text((114 * SS, 543 * SS), "github.com/Drasezv/cctab", font=font("SFNSMono.ttf", 24), fill=BONE)
-    return img.resize((1280, 640), Image.LANCZOS)
+    d.text((114 * SS, 543 * SS), "github.com/Drasezv/cctab", font=font("SFNSMono.ttf", 24, SS), fill=BONE)
+    return img.resize((1280 * scale, 640 * scale), Image.LANCZOS)
 
 
 def icon():
@@ -75,41 +77,61 @@ def icon():
     return out.resize((512, 512), Image.LANCZOS)
 
 
+def duotone(img, dark=(17, 16, 16), light=(238, 234, 228)):
+    """flatten telegram's green and purple into one warm range, keeping depth"""
+    grey = img.convert("L")
+    ramp = []
+    for i in range(256):
+        t = (i / 255) ** 1.45          # hold the dark end down, let type stay bright
+        ramp.append(tuple(round(dark[c] + (light[c] - dark[c]) * t) for c in range(3)))
+    out = Image.new("RGB", img.size)
+    out.putdata([ramp[v] for v in grey.getdata()])
+    return out
+
+
 def social():
-    W, H = 1600 * SS, 900 * SS
-    card = cover(Image.open(f"{SRC}/social-bg.png").convert("RGB"), W, H, anchor="center")
-    card = Image.blend(card, Image.new("RGB", card.size, (14, 12, 12)), 0.35)
+    W, H = 1600, 900
+    big = (W * SS, H * SS)
+    card = cover(Image.open(f"{SRC}/social-bg.png").convert("RGB"), *big, anchor="center")
+    card = Image.blend(card, Image.new("RGB", big, (13, 12, 12)), 0.45)
 
     shot = Image.open(f"{DOCS}/task-done.png").convert("RGB")
-    shot = shot.crop(shot.getbbox() or (0, 0, *shot.size))
-    bg = Image.new("RGB", shot.size, shot.getpixel((2, 2)))
-    from PIL import ImageChops
-    box = ImageChops.difference(shot, bg).convert("L").point(lambda v: 255 if v > 10 else 0).getbbox()
-    shot = shot.crop(box)                            # only the message, no window padding
-
-    target = round(W * 0.55)
-    shot = shot.resize((target, round(shot.height * target / shot.width)), Image.LANCZOS)
-
-    x = (W - shot.width) // 2
-    y = (H - shot.height) // 2 + round(28 * SS)
-    glow = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    ImageDraw.Draw(glow).rectangle(
-        [x - 10 * SS, y - 10 * SS, x + shot.width + 10 * SS, y + shot.height + 10 * SS],
-        fill=(217, 119, 87, 60))
-    card = Image.alpha_composite(card.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(40 * SS)))
-
-    shadow = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rectangle(
-        [x, y + 16 * SS, x + shot.width, y + shot.height + 30 * SS], fill=(0, 0, 0, 205))
-    card = Image.alpha_composite(card, shadow.filter(ImageFilter.GaussianBlur(30 * SS))).convert("RGB")
-    card.paste(shot, (x, y))
+    shot = shot.crop((0, 6, shot.width, 525))        # no top strip, no timestamp
+    dot = shot.crop((26, 8, 70, 52))                 # the status emoji, kept readable
+    shot = duotone(shot)
+    shot.paste(Image.blend(shot.crop((26, 8, 70, 52)), dot, 0.5), (26, 8))
 
     d = ImageDraw.Draw(card)
-    d.rectangle([x, y - 2 * SS, x + shot.width, y], fill=(52, 60, 74))   # a clean top edge
-    tracked(d, (x, y - 108 * SS), "cctab", font("SFNS.ttf", 52), BONE, tracking=-2)
-    d.text((x + 168 * SS, y - 90 * SS), "one message per finished task",
-           font=font("SFNS.ttf", 25), fill=MUTED)
-    return card.resize((1600, 900), Image.LANCZOS)
+    x = (W - shot.width) // 2
+    y = (H - shot.height) // 2 + 6
+    # the wordmark and its line sit together, just above the message
+    wm = font("SFNS.ttf", 46)
+    end_x = tracked(d, (x * SS, (y - 84) * SS), "cctab", wm, BONE, tracking=-2)
+    sub = font("SFNS.ttf", 23)
+    d.text((end_x + 18 * SS, (y - 72) * SS), "one message per finished task", font=sub, fill=MUTED)
+
+    glow = Image.new("RGBA", big, (0, 0, 0, 0))
+    ImageDraw.Draw(glow).rounded_rectangle(
+        [(x - 16) * SS, (y - 16) * SS, (x + shot.width + 16) * SS, (y + shot.height + 16) * SS],
+        radius=40 * SS, fill=(214, 128, 92, 70))
+    card = Image.alpha_composite(card.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(46 * SS)))
+
+    shadow = Image.new("RGBA", big, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        [x * SS, (y + 18) * SS, (x + shot.width) * SS, (y + shot.height + 34) * SS],
+        radius=30 * SS, fill=(0, 0, 0, 210))
+    card = Image.alpha_composite(card, shadow.filter(ImageFilter.GaussianBlur(34 * SS)))
+
+    card = card.convert("RGB").resize((W, H), Image.LANCZOS)   # shrink first, paste pixel for pixel
+    mask = Image.new("L", shot.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, shot.width - 1, shot.height - 1], radius=26, fill=255)
+    card.paste(shot, (x, y), mask)
+
+    d = ImageDraw.Draw(card)
+    foot = ImageFont.truetype("/System/Library/Fonts/SFNSMono.ttf", 20)
+    d.rectangle([x, y + shot.height + 44, x + 3, y + shot.height + 68], fill=CORAL)
+    d.text((x + 20, y + shot.height + 46), "github.com/Drasezv/cctab", font=foot, fill=(150, 142, 133))
+    return card
 
 
 if __name__ == "__main__":
