@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 promo/
 .DS_Store
+assets/src/

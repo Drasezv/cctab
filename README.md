@@ -2,6 +2,8 @@
 
 # cctab
 
+[![tests](https://github.com/Drasezv/cctab/actions/workflows/tests.yml/badge.svg)](https://github.com/Drasezv/cctab/actions/workflows/tests.yml) [![license](https://img.shields.io/github/license/Drasezv/cctab)](LICENSE)
+
 Telegram message when a long Claude Code task finishes, with the cost and how
 much of the rate limit it used.
 
