@@ -86,6 +86,15 @@ class Money(Base):
         self.assertAlmostEqual(
             self.m.cost({"input_tokens": 1_000_000}, "claude-opus-5"), 5.0, places=6)
 
+    def test_sonnet_55_price(self):
+        # $2/$10 with the standard 0.1x cache read
+        self.assertAlmostEqual(
+            self.m.cost({"input_tokens": 1_000_000}, "claude-sonnet-5-5"), 2.0, places=6)
+        self.assertAlmostEqual(
+            self.m.cost({"output_tokens": 1_000_000}, "claude-sonnet-5-5"), 10.0, places=6)
+        self.assertAlmostEqual(
+            self.m.cost({"cache_read_input_tokens": 1_000_000}, "claude-sonnet-5-5"), 0.2, places=6)
+
     def test_cache_write_ttl(self):
         five = {"cache_creation_input_tokens": 1_000_000,
                 "cache_creation": {"ephemeral_5m_input_tokens": 1_000_000}}
